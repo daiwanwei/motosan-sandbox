@@ -8,13 +8,17 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use motosan_agent_tool::{Tool, ToolContext, ToolDef, ToolResult};
 use serde_json::{json, Value};
 
 use motosan_agent_loop::testing::MockLlmClient;
-use motosan_agent_loop::{Engine, LlmClient, LlmResponse, Message};
+use motosan_agent_loop::{
+    Engine, ExtError, Extension, FlowDecision, HookCtx, LlmClient, LlmResponse, Message,
+    ToolCallItem, ToolDecision,
+};
 
 use motosan_sandbox::{
     is_likely_sandbox_denied, ExecOutput, NetworkPolicy, RunOpts, Sandbox, SandboxCommand,
@@ -227,3 +231,102 @@ async fn engine_tool_denied_writing_outside_workspace() {
         "write outside the workspace must be denied"
     );
 }
+
+/// Consumer-side approval: when a result carries the sandbox-denied sentinel,
+/// inject a hint so the model can re-request with `escalated:true` (reissue —
+/// NOT Defer; see design §4).
+#[derive(Default)]
+struct SandboxApprovalExtension {
+    injections: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Extension for SandboxApprovalExtension {
+    fn name(&self) -> &'static str {
+        "sandbox-approval"
+    }
+
+    async fn after_tool_result(
+        &mut self,
+        result: &ToolResult,
+        _ctx: &mut HookCtx<'_>,
+    ) -> Result<FlowDecision, ExtError> {
+        let denied =
+            result.is_error && result.as_text().is_some_and(|t| t.contains(DENIED_SENTINEL));
+        if denied {
+            self.injections.fetch_add(1, Ordering::SeqCst);
+            Ok(FlowDecision::Inject(Message::user(
+                "That command was blocked by the sandbox. If it genuinely needs \
+                 to escape the workspace, call `shell` again with \"escalated\": true.",
+            )))
+        } else {
+            Ok(FlowDecision::Continue)
+        }
+    }
+}
+
+#[tokio::test]
+async fn denied_then_reissued_escalated_succeeds() {
+    let (_guard, ws) = workspace();
+    let (_other_guard, other) = workspace();
+    let escape = other.join("escape.txt");
+    let escape_cmd = format!("echo x > {}", escape.display());
+
+    let injections = Arc::new(AtomicUsize::new(0));
+    let ext = SandboxApprovalExtension {
+        injections: Arc::clone(&injections),
+    };
+    let tool = SandboxedExecTool {
+        sandbox: Sandbox::new(),
+        workspace: ws.clone(),
+    };
+
+    let llm = Arc::new(MockLlmClient::new(vec![
+        // turn 1: sandboxed write outside → denied
+        LlmResponse::single_tool_call(
+            "c1".into(),
+            "shell".into(),
+            json!({ "command": ["/bin/sh", "-c", escape_cmd.clone()] }),
+        ),
+        // turn 2: after the injected hint, retry escalated → DangerFullAccess
+        LlmResponse::single_tool_call(
+            "c2".into(),
+            "shell".into(),
+            json!({ "command": ["/bin/sh", "-c", escape_cmd], "escalated": true }),
+        ),
+        // turn 3: done
+        LlmResponse::Message("done".into()),
+    ]));
+
+    let agent = Arc::new(
+        Engine::builder()
+            .tool(Arc::new(tool))
+            .extension(Box::new(ext))
+            .max_iterations(6)
+            .build(),
+    );
+
+    let result = agent
+        .run(
+            llm as Arc<dyn LlmClient>,
+            vec![Message::user("write outside, escalate if needed")],
+        )
+        .result()
+        .await
+        .unwrap();
+
+    assert_eq!(result.answer, "done");
+    assert_eq!(
+        injections.load(Ordering::SeqCst),
+        1,
+        "denial should inject exactly one hint"
+    );
+    assert!(
+        escape.exists(),
+        "escalated (DangerFullAccess) retry should have written the file"
+    );
+}
+
+// keep references alive for unused imports check until Task 5 adds users
+#[allow(dead_code)]
+fn _phantom_uses(_a: ToolCallItem, _b: ToolDecision) {}
