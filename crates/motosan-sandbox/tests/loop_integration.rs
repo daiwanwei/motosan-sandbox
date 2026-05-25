@@ -182,3 +182,48 @@ async fn engine_dispatches_tool_and_runs_inside_workspace() {
         "tool should have written inside the workspace"
     );
 }
+
+#[tokio::test]
+async fn engine_tool_denied_writing_outside_workspace() {
+    let (_guard, ws) = workspace();
+    let (_other_guard, other) = workspace(); // outside the writable root
+    let escape = other.join("escape.txt");
+    let tool = SandboxedExecTool {
+        sandbox: Sandbox::new(),
+        workspace: ws.clone(),
+    };
+
+    let llm = Arc::new(MockLlmClient::new(vec![
+        LlmResponse::single_tool_call(
+            "c1".into(),
+            "shell".into(),
+            json!({ "command": ["/bin/sh", "-c", format!("echo x > {}", escape.display())] }),
+        ),
+        LlmResponse::Message("acknowledged".into()),
+    ]));
+
+    let agent = Arc::new(
+        Engine::builder()
+            .tool(Arc::new(tool))
+            .max_iterations(4)
+            .build(),
+    );
+
+    let result = agent
+        .run(
+            llm as Arc<dyn LlmClient>,
+            vec![Message::user("write outside")],
+        )
+        .result()
+        .await
+        .unwrap();
+
+    // The run completes (the model gets the denied result back and says its line)…
+    assert_eq!(result.answer, "acknowledged");
+    // …but the sandbox actually blocked the write. This is the load-bearing
+    // assertion: real Seatbelt denied an out-of-root write end-to-end.
+    assert!(
+        !escape.exists(),
+        "write outside the workspace must be denied"
+    );
+}
