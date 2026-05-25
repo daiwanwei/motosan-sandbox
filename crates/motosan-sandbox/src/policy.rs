@@ -15,7 +15,51 @@ pub enum NetworkPolicy {
     Blocked,
     /// Full network access.
     Allowed,
-    // Phase 2 adds: Proxied { allowlist: Vec<HostPattern> }
+    /// Egress only to allowlisted hosts, via a local proxy. Hard on macOS
+    /// (Seatbelt restricts egress to the proxy endpoint); `Error::Unsupported`
+    /// on Linux until Phase 3 (netns + loopback bridge).
+    Proxied { allowlist: Vec<HostPattern> },
+}
+
+/// An allowlist entry. Matching itself lives in the proxy crate; here we model
+/// the policy API and render to the canonical string the proxy parses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostPattern {
+    /// Exactly this host (`example.com` matches only `example.com`).
+    Exact(String),
+    /// Subdomains only (`*.example.com` matches `a.example.com`, NOT the apex).
+    SubdomainsOnly(String),
+    /// Apex + subdomains (`**.example.com` matches `example.com` and `a.example.com`).
+    ApexAndSubdomains(String),
+    /// Any host. Allowlist-only (meaningless/forbidden as a denial).
+    Any,
+}
+
+impl HostPattern {
+    /// Parse `"example.com"` / `"*.example.com"` / `"**.example.com"` / `"*"`.
+    pub fn parse(s: &str) -> Self {
+        let s = s.trim();
+        if s == "*" {
+            HostPattern::Any
+        } else if let Some(rest) = s.strip_prefix("**.") {
+            HostPattern::ApexAndSubdomains(rest.to_ascii_lowercase())
+        } else if let Some(rest) = s.strip_prefix("*.") {
+            HostPattern::SubdomainsOnly(rest.to_ascii_lowercase())
+        } else {
+            HostPattern::Exact(s.to_ascii_lowercase())
+        }
+    }
+
+    /// Canonical string form (round-trips with [`HostPattern::parse`]). This is
+    /// what `run()` passes to the proxy crate, which does the actual matching.
+    pub fn to_pattern_string(&self) -> String {
+        match self {
+            HostPattern::Exact(h) => h.clone(),
+            HostPattern::SubdomainsOnly(h) => format!("*.{h}"),
+            HostPattern::ApexAndSubdomains(h) => format!("**.{h}"),
+            HostPattern::Any => "*".to_string(),
+        }
+    }
 }
 
 /// Writable workspace policy: whole filesystem is readable; writes are confined
@@ -138,5 +182,53 @@ mod tests {
             network: NetworkPolicy::Blocked
         }
         .is_full_access());
+    }
+}
+
+#[cfg(test)]
+mod host_pattern_tests {
+    use super::*;
+
+    #[test]
+    fn parses_each_shape() {
+        assert_eq!(
+            HostPattern::parse("example.com"),
+            HostPattern::Exact("example.com".into())
+        );
+        assert_eq!(
+            HostPattern::parse("*.example.com"),
+            HostPattern::SubdomainsOnly("example.com".into())
+        );
+        assert_eq!(
+            HostPattern::parse("**.example.com"),
+            HostPattern::ApexAndSubdomains("example.com".into())
+        );
+        assert_eq!(HostPattern::parse("*"), HostPattern::Any);
+    }
+
+    #[test]
+    fn round_trips_to_string() {
+        for s in ["example.com", "*.example.com", "**.example.com", "*"] {
+            assert_eq!(HostPattern::parse(s).to_pattern_string(), s);
+        }
+    }
+
+    #[test]
+    fn lowercases_host() {
+        assert_eq!(
+            HostPattern::parse("Example.COM"),
+            HostPattern::Exact("example.com".into())
+        );
+    }
+
+    #[test]
+    fn proxied_carries_allowlist() {
+        let n = NetworkPolicy::Proxied {
+            allowlist: vec![HostPattern::parse("*.example.com")],
+        };
+        let NetworkPolicy::Proxied { allowlist } = &n else {
+            panic!("expected Proxied")
+        };
+        assert_eq!(allowlist.len(), 1);
     }
 }
