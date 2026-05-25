@@ -13,6 +13,9 @@ use std::sync::Arc;
 use motosan_agent_tool::{Tool, ToolContext, ToolDef, ToolResult};
 use serde_json::{json, Value};
 
+use motosan_agent_loop::testing::MockLlmClient;
+use motosan_agent_loop::{Engine, LlmClient, LlmResponse, Message};
+
 use motosan_sandbox::{
     is_likely_sandbox_denied, ExecOutput, NetworkPolicy, RunOpts, Sandbox, SandboxCommand,
     SandboxPolicy, WorkspaceWrite,
@@ -141,4 +144,41 @@ async fn tool_runs_command_under_sandbox_directly() {
         .await;
     assert!(!res.is_error, "got: {:?}", res.as_text());
     assert!(ws.join("inside.txt").exists());
+}
+
+#[tokio::test]
+async fn engine_dispatches_tool_and_runs_inside_workspace() {
+    let (_guard, ws) = workspace();
+    let tool = SandboxedExecTool {
+        sandbox: Sandbox::new(),
+        workspace: ws.clone(),
+    };
+
+    let llm = Arc::new(MockLlmClient::new(vec![
+        LlmResponse::single_tool_call(
+            "c1".into(),
+            "shell".into(),
+            json!({ "command": ["/bin/sh", "-c", "echo hi > inside.txt"] }),
+        ),
+        LlmResponse::Message("done".into()),
+    ]));
+
+    let agent = Arc::new(
+        Engine::builder()
+            .tool(Arc::new(tool))
+            .max_iterations(4)
+            .build(),
+    );
+
+    let result = agent
+        .run(llm as Arc<dyn LlmClient>, vec![Message::user("write a file")])
+        .result()
+        .await
+        .unwrap();
+
+    assert_eq!(result.answer, "done");
+    assert!(
+        ws.join("inside.txt").exists(),
+        "tool should have written inside the workspace"
+    );
 }
