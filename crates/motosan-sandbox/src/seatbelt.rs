@@ -3,6 +3,7 @@
 //! write-scoped, network all-or-nothing.
 
 use std::ffi::OsString;
+use std::net::SocketAddr;
 use std::path::Path;
 
 use crate::error::Error;
@@ -22,8 +23,12 @@ pub(crate) struct Param {
 }
 
 /// Assemble the full SBPL policy text + the `-D` params it references, for the
-/// given policy. Returns `(policy_text, params)`.
-pub(crate) fn build_policy(policy: &SandboxPolicy) -> (String, Vec<Param>) {
+/// given policy. `proxy` MUST be `Some(addr)` when the policy is `Proxied`
+/// (fail-closed: a `Proxied` policy without an address is a transform error).
+pub(crate) fn build_policy(
+    policy: &SandboxPolicy,
+    proxy: Option<SocketAddr>,
+) -> Result<(String, Vec<Param>), Error> {
     let mut sections: Vec<String> = vec![BASE_POLICY.to_string()];
     let mut params: Vec<Param> = Vec::new();
 
@@ -54,11 +59,29 @@ pub(crate) fn build_policy(policy: &SandboxPolicy) -> (String, Vec<Param>) {
     }
 
     // Network: only add an allow rule when enabled; base (deny default) blocks it.
-    if policy.network() == NetworkPolicy::Allowed {
-        sections.push("(allow network*)".to_string());
+    match policy.network() {
+        NetworkPolicy::Blocked => {}
+        NetworkPolicy::Allowed => {
+            sections.push("(allow network*)".to_string());
+        }
+        NetworkPolicy::Proxied { .. } => {
+            // Fail-closed: no allow-all without a known proxy port (spec §7).
+            let addr = proxy
+                .ok_or_else(|| Error::Transform("proxied policy needs a running proxy".into()))?;
+            // VERIFIED rule form (see seatbelt_proxy_probe.rs): sandbox-exec
+            // rejects numeric IPs in `(remote ip …)` with `host must be * or
+            // localhost in network address`; only the `localhost:<port>` form
+            // is accepted, and it matches the child's actual `127.0.0.1:<port>`
+            // dial. No additional `network-bind`/`network-inbound` loopback
+            // rules are required.
+            sections.push(format!(
+                "(allow network-outbound (remote ip \"localhost:{}\"))",
+                addr.port()
+            ));
+        }
     }
 
-    (sections.join("\n"), params)
+    Ok((sections.join("\n"), params))
 }
 
 fn path_str(p: &Path) -> String {
@@ -66,11 +89,14 @@ fn path_str(p: &Path) -> String {
 }
 
 /// Build the full `SpawnRequest` wrapping the command in `sandbox-exec`.
+/// `proxy` is `Some(addr)` iff the policy is `Proxied`; passed through to
+/// [`build_policy`].
 pub(crate) fn transform_seatbelt(
     cmd: &SandboxCommand,
     policy: &SandboxPolicy,
+    proxy: Option<SocketAddr>,
 ) -> Result<SpawnRequest, Error> {
-    let (policy_text, params) = build_policy(policy);
+    let (policy_text, params) = build_policy(policy, proxy)?;
 
     let mut args: Vec<OsString> = Vec::new();
     args.push("-p".into());
@@ -96,13 +122,17 @@ pub(crate) fn transform_seatbelt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::WorkspaceWrite;
+    use crate::policy::{HostPattern, WorkspaceWrite};
 
     #[test]
     fn base_policy_denies_by_default() {
-        let (text, params) = build_policy(&SandboxPolicy::ReadOnly {
-            network: NetworkPolicy::Blocked,
-        });
+        let (text, params) = build_policy(
+            &SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Blocked,
+            },
+            None,
+        )
+        .unwrap();
         assert!(text.contains("(deny default)"));
         assert!(text.contains("(allow file-read*)"));
         assert!(!text.contains("(allow network*)"));
@@ -112,16 +142,20 @@ mod tests {
 
     #[test]
     fn read_only_with_network_adds_network_rule() {
-        let (text, _) = build_policy(&SandboxPolicy::ReadOnly {
-            network: NetworkPolicy::Allowed,
-        });
+        let (text, _) = build_policy(
+            &SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Allowed,
+            },
+            None,
+        )
+        .unwrap();
         assert!(text.contains("(allow network*)"));
     }
 
     #[test]
     fn workspace_write_emits_writable_and_readonly_params() {
         let w = WorkspaceWrite::new(vec!["/ws".into(), "/cache".into()]).read_only("/ws/secrets");
-        let (text, params) = build_policy(&SandboxPolicy::WorkspaceWrite(w));
+        let (text, params) = build_policy(&SandboxPolicy::WorkspaceWrite(w), None).unwrap();
 
         assert!(text.contains("(allow file-write* (subpath (param \"WRITABLE_ROOT_0\")))"));
         assert!(text.contains("(allow file-write* (subpath (param \"WRITABLE_ROOT_1\")))"));
@@ -148,6 +182,35 @@ mod tests {
                 name: "READONLY_SUB_0".into(),
                 value: "/ws/secrets".into()
             }
+        );
+    }
+
+    #[test]
+    fn proxied_emits_localhost_port_rule() {
+        let policy = SandboxPolicy::WorkspaceWrite(
+            WorkspaceWrite::new(vec!["/ws".into()]).network(NetworkPolicy::Proxied {
+                allowlist: vec![HostPattern::parse("*.example.com")],
+            }),
+        );
+        let addr: SocketAddr = "127.0.0.1:54321".parse().unwrap();
+        let (text, _) = build_policy(&policy, Some(addr)).unwrap();
+        assert!(
+            text.contains("(allow network-outbound (remote ip \"localhost:54321\"))"),
+            "got: {text}"
+        );
+        // No allow-all network rule must appear.
+        assert!(!text.contains("(allow network*)"));
+    }
+
+    #[test]
+    fn proxied_without_addr_fails_closed() {
+        let policy = SandboxPolicy::ReadOnly {
+            network: NetworkPolicy::Proxied { allowlist: vec![] },
+        };
+        let err = build_policy(&policy, None).unwrap_err();
+        assert!(
+            matches!(err, Error::Transform(ref m) if m.contains("proxied")),
+            "expected Transform error, got {err:?}"
         );
     }
 }

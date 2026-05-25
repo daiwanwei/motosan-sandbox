@@ -91,6 +91,12 @@ impl HelperPolicy {
     /// Linux backend cannot express.
     pub(crate) fn from_policy(policy: &SandboxPolicy) -> Result<Self, Error> {
         use crate::policy::NetworkPolicy;
+        // Phase 2: Proxied has no Linux backend yet (Phase 3 = netns + loopback
+        // bridge). Fail loud rather than silently ship a cooperative bypassable
+        // mode. (`run()` + `transform()` also guard this.)
+        if matches!(policy.network(), NetworkPolicy::Proxied { .. }) {
+            return Err(Error::Unsupported(crate::SandboxKind::LinuxSeccomp));
+        }
         let network_blocked = policy.network() == NetworkPolicy::Blocked;
         let writable_roots = match policy {
             // DangerFullAccess never reaches the helper (transform passes through).

@@ -1,7 +1,9 @@
 //! `motosan-sandbox` — run a command under a filesystem/network policy.
 //!
 //! Phase 0: core types + macOS Seatbelt. Phase 1 adds Linux Landlock + seccomp
-//! via the re-exec helper hook.
+//! via the re-exec helper hook. Phase 2 adds the `proxy` feature:
+//! `NetworkPolicy::Proxied { allowlist }` is hard on macOS (Seatbelt restricts
+//! egress to the proxy port) and `Error::Unsupported` on Linux until Phase 3.
 
 mod denial;
 mod error;
@@ -70,7 +72,61 @@ impl Sandbox {
     }
 }
 
+/// RAII slot holding the optional proxy server. Feature-gated so the rest of
+/// `run()` stays cfg-clean. `Drop` aborts the serving task on EVERY exit path
+/// (success, `?` early return, panic) — see spec §5.
+struct ProxyGuard {
+    #[cfg(feature = "proxy")]
+    _server: Option<motosan_sandbox_proxy::ProxyServerHandle>,
+}
+
 impl Sandbox {
+    /// Start the local proxy iff the policy is `Proxied`. Returns the lightweight
+    /// address-carrier (borrowed by `TransformCtx`) plus the RAII server slot.
+    async fn maybe_start_proxy(
+        &self,
+        policy: &SandboxPolicy,
+        kind: SandboxKind,
+    ) -> Result<(Option<ProxyHandle>, ProxyGuard), Error> {
+        let NetworkPolicy::Proxied { allowlist } = policy.network() else {
+            return Ok((
+                None,
+                ProxyGuard {
+                    #[cfg(feature = "proxy")]
+                    _server: None,
+                },
+            ));
+        };
+        // Linux Proxied is Unsupported until Phase 3 (no cooperative fallback).
+        if kind == SandboxKind::LinuxSeccomp {
+            return Err(Error::Unsupported(SandboxKind::LinuxSeccomp));
+        }
+        #[cfg(feature = "proxy")]
+        {
+            let patterns: Vec<String> = allowlist.iter().map(|p| p.to_pattern_string()).collect();
+            let server =
+                motosan_sandbox_proxy::ProxyServer::start(motosan_sandbox_proxy::ProxyConfig {
+                    allowlist: patterns,
+                })
+                .await
+                .map_err(Error::Spawn)?;
+            let addr = server.addr;
+            Ok((
+                Some(ProxyHandle { addr }),
+                ProxyGuard {
+                    _server: Some(server),
+                },
+            ))
+        }
+        #[cfg(not(feature = "proxy"))]
+        {
+            let _ = allowlist;
+            Err(Error::Transform(
+                "Proxied policy requires the `proxy` feature".into(),
+            ))
+        }
+    }
+
     /// Detect the backend, transform under `policy`, spawn, and capture.
     pub async fn run(
         &self,
@@ -78,12 +134,21 @@ impl Sandbox {
         policy: &SandboxPolicy,
         opts: RunOpts,
     ) -> Result<ExecOutput, Error> {
-        // Phase 0: no proxy lifecycle yet (NetworkPolicy has no Proxied variant).
         let kind = Self::detect();
         let helper_reexec = kind == SandboxKind::LinuxSeccomp && !policy.is_full_access();
-        let ctx = TransformCtx::default();
+
+        // Start the proxy iff the policy is Proxied. `addr_carrier` is borrowed
+        // by `ctx`; `_guard` is the RAII slot whose Drop aborts the proxy task
+        // on EVERY exit path (success, `?`, panic). Both must live until after
+        // `spawn_and_capture` returns.
+        let (addr_carrier, _guard) = self.maybe_start_proxy(policy, kind).await?;
+        let ctx = TransformCtx {
+            proxy: addr_carrier.as_ref(),
+        };
+
         let req = self.transform(&cmd, policy, &ctx)?;
         spawn::spawn_and_capture(req, &opts, helper_reexec).await
+        // `_guard` drops here (and on any `?` above) → proxy task aborted.
     }
 }
 
