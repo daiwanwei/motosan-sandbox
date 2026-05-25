@@ -35,6 +35,9 @@ jobs:
       - name: cargo clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
 
+      # Linux sandbox tests use Landlock + seccomp only — NO bubblewrap, NO
+      # unprivileged-userns / AppArmor sysctls needed (unlike bwrap-based sandboxes).
+      # ubuntu-latest's kernel is Landlock-capable, so enforcement runs for real.
       - name: cargo test (default)
         run: cargo test --all-targets
 

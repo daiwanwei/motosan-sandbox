@@ -1,7 +1,7 @@
 use motosan_sandbox::{Sandbox, SandboxCommand, SandboxPolicy, TransformCtx, NETWORK_DISABLED_ENV};
-// Only the Linux-gated test uses these; cfg the import so macOS has no unused-import warning.
+// Only the Linux-gated test uses this; cfg the import so macOS has no unused-import warning.
 #[cfg(target_os = "linux")]
-use motosan_sandbox::{NetworkPolicy, SandboxKind};
+use motosan_sandbox::NetworkPolicy;
 use std::collections::BTreeMap;
 
 fn cmd(program: &str, args: &[&str]) -> SandboxCommand {
@@ -33,9 +33,9 @@ fn danger_full_access_is_passthrough() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_is_unsupported_in_phase0() {
-    let sb = Sandbox::new();
-    let err = sb
+fn linux_builds_reexec_request() {
+    let sb = Sandbox::new().with_helper_exe("/tmp/motosan-sandbox-helper");
+    let req = sb
         .transform(
             &cmd("echo", &["hi"]),
             &SandboxPolicy::ReadOnly {
@@ -43,9 +43,27 @@ fn linux_is_unsupported_in_phase0() {
             },
             &TransformCtx::default(),
         )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        motosan_sandbox::Error::Unsupported(SandboxKind::LinuxSeccomp)
-    ));
+        .expect("linux transforms to helper re-exec");
+
+    assert_eq!(
+        req.program,
+        std::ffi::OsString::from("/tmp/motosan-sandbox-helper")
+    );
+    assert_eq!(
+        req.args,
+        vec![
+            std::ffi::OsString::from("echo"),
+            std::ffi::OsString::from("hi")
+        ]
+    );
+    assert_eq!(
+        req.arg0,
+        Some(std::ffi::OsString::from("__motosan_sandbox_helper"))
+    );
+    assert!(req
+        .env
+        .contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
+    assert!(req
+        .env
+        .contains_key(std::ffi::OsStr::new("MOTOSAN_SANDBOX_POLICY")));
 }

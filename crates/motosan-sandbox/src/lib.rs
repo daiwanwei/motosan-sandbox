@@ -11,10 +11,10 @@ mod spawn;
 mod transform;
 mod types;
 
-#[cfg(target_os = "macos")]
-mod seatbelt;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod seatbelt;
 
 pub mod helper;
 

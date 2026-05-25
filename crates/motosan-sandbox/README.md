@@ -3,9 +3,8 @@
 Run a command under a filesystem/network policy. Decoupled from any agent/LLM —
 it only knows "run this command under this policy."
 
-**Status:** Phase 0 — core API + macOS Seatbelt. Linux enforcement (bwrap +
-seccomp + Landlock) arrives in Phase 1; until then `run()` returns
-`Error::Unsupported` on Linux. Network is on/off; the allowlist proxy is Phase 2.
+**Status:** Phase 1 — core API + macOS Seatbelt + Linux Landlock/seccomp.
+Network is on/off; the allowlist proxy is Phase 2.
 
 ## Platform selection
 
@@ -60,6 +59,25 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 - **macOS paths are resolved.** Canonicalize writable roots (`/var` →
   `/private/var`) before building a policy.
 - macOS `sandbox-exec` is deprecated by Apple but still functional; tracked risk.
+
+## Linux (Phase 1)
+
+`run()` enforces on Linux via **Landlock** (filesystem: read-everywhere, write
+confined to `writable_roots`) + **seccomp** (network: denies `AF_INET`/`AF_INET6`
+socket creation when blocked). No bubblewrap. Requires kernel ≥ 5.13; if Landlock
+can't be enforced, `run()` returns `Error::NotEnforced` (never runs unsandboxed).
+
+Consumers MUST call `motosan_sandbox::helper::run_if_invoked()` as the first line
+of `main()` (self-reexec); otherwise Linux sandboxing silently won't engage.
+
+Pass **canonical** `writable_roots` — Landlock matches the *resolved* path (e.g.
+`/var` → `/private/var` on macOS; symlinked roots on Linux), so canonicalize
+roots before building the policy or writes inside them may be denied. (Same
+requirement as macOS.)
+
+Limitations vs macOS: `read_only_subpaths` is **not supported** on Linux
+(Landlock is allow-only) — a policy that sets it returns `Error::Unsupported`.
+Files remain readable (only writes are confined), same as macOS Phase 0.
 
 ## Using with motosan-agent-loop (validated by the integration spike)
 

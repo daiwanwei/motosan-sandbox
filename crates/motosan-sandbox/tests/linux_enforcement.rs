@@ -167,7 +167,11 @@ async fn network_blocked() {
         env,
     };
     let out = sb
-        .run(cmd, &ws_policy(&ws, NetworkPolicy::Blocked), RunOpts::default())
+        .run(
+            cmd,
+            &ws_policy(&ws, NetworkPolicy::Blocked),
+            RunOpts::default(),
+        )
         .await
         .unwrap();
     assert_ne!(

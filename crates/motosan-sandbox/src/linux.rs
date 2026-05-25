@@ -36,7 +36,10 @@ pub(crate) fn run_if_invoked() {
             Ok(h) => h,
             Err(e) => die(HELPER_EXIT_BAD_POLICY, &format!("bad policy json: {e}")),
         },
-        Err(e) => die(HELPER_EXIT_BAD_POLICY, &format!("missing {POLICY_ENV}: {e}")),
+        Err(e) => die(
+            HELPER_EXIT_BAD_POLICY,
+            &format!("missing {POLICY_ENV}: {e}"),
+        ),
     };
 
     // 1. no_new_privs (required for seccomp without CAP_SYS_ADMIN).
@@ -57,10 +60,7 @@ pub(crate) fn run_if_invoked() {
     }
     // 3. Landlock (filesystem). Fail loud if not enforced.
     if let Err(e) = install_landlock(&helper.writable_roots) {
-        die(
-            HELPER_EXIT_NOT_ENFORCED,
-            &format!("landlock failed: {e}"),
-        );
+        die(HELPER_EXIT_NOT_ENFORCED, &format!("landlock failed: {e}"));
     }
 
     // Don't leak the IPC var into the target.
@@ -82,28 +82,25 @@ fn die(code: i32, msg: &str) -> ! {
 
 fn install_network_seccomp() -> Result<(), String> {
     use seccompiler::{
-        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp,
-        SeccompCondition, SeccompFilter, SeccompRule, TargetArch,
+        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+        SeccompFilter, SeccompRule, TargetArch,
     };
 
     let map = |fam: u64| -> Result<SeccompRule, String> {
-        SeccompRule::new(vec![
-            SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, fam)
-                .map_err(|e| e.to_string())?,
-        ])
+        SeccompRule::new(vec![SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Eq,
+            fam,
+        )
+        .map_err(|e| e.to_string())?])
         .map_err(|e| e.to_string())
     };
     let af_inet = libc::AF_INET as u64;
     let af_inet6 = libc::AF_INET6 as u64;
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
-    rules.insert(
-        libc::SYS_socket as i64,
-        vec![map(af_inet)?, map(af_inet6)?],
-    );
-    rules.insert(
-        libc::SYS_socketpair as i64,
-        vec![map(af_inet)?, map(af_inet6)?],
-    );
+    rules.insert(libc::SYS_socket, vec![map(af_inet)?, map(af_inet6)?]);
+    rules.insert(libc::SYS_socketpair, vec![map(af_inet)?, map(af_inet6)?]);
 
     let arch = match std::env::consts::ARCH {
         "x86_64" => TargetArch::x86_64,
