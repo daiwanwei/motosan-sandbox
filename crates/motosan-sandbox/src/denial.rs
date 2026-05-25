@@ -10,6 +10,14 @@ const DENIAL_MARKERS: &[&str] = &[
     "seccomp",
     "sandbox",
     "landlock",
+    // Phase 3 (Linux Proxied / bwrap netns): a non-cooperative tool that
+    // dials a raw IP in the empty netns fails by routing, not by seccomp.
+    // The connect surfaces as ENETUNREACH/EHOSTUNREACH (libc), so we add
+    // both substrings. Scope: a normal "connection refused" to an
+    // allowed-but-down host is NOT in this set on purpose — that's a
+    // legitimate upstream failure, not a sandbox denial.
+    "network is unreachable",
+    "no route to host",
 ];
 
 /// Non-sandbox exit codes we must NOT misread as denials.
@@ -88,5 +96,29 @@ mod tests {
     fn sigsys_on_linux_is_denial() {
         let o = out(None, Some(31), "");
         assert!(is_likely_sandbox_denied(&o, SandboxKind::LinuxSeccomp));
+    }
+
+    /// Phase 3: a non-cooperative tool dialing a raw IP in the bwrap netns
+    /// fails by routing — `ENETUNREACH` → "Network is unreachable". The
+    /// classifier must surface this as a sandbox denial so consumers know
+    /// to offer escalation.
+    #[test]
+    fn netns_network_unreachable_is_denial() {
+        let o = out(Some(1), None, "connect: Network is unreachable");
+        assert!(is_likely_sandbox_denied(&o, SandboxKind::LinuxSeccomp));
+    }
+
+    #[test]
+    fn netns_no_route_to_host_is_denial() {
+        let o = out(Some(1), None, "curl: (7) No route to host");
+        assert!(is_likely_sandbox_denied(&o, SandboxKind::LinuxSeccomp));
+    }
+
+    /// Negative: a plain "connection refused" (allowed-but-down upstream)
+    /// must NOT be classified as a sandbox denial.
+    #[test]
+    fn connection_refused_is_not_a_sandbox_denial() {
+        let o = out(Some(1), None, "connect: Connection refused");
+        assert!(!is_likely_sandbox_denied(&o, SandboxKind::LinuxSeccomp));
     }
 }
