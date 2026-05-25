@@ -178,7 +178,7 @@ pub(crate) fn build_reexec_request(
     }
 
     // argv layout the helper expects: [<real program>, <real args>...].
-    // `spawn` recognizes POLICY_ENV and overrides argv[0] to the sentinel.
+    // `Sandbox::run` tells `spawn` when to override argv[0] to the sentinel.
     let mut args: Vec<OsString> = Vec::with_capacity(1 + cmd.args.len());
     args.push(cmd.program.clone());
     args.extend(cmd.args.iter().cloned());

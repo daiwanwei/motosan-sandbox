@@ -79,9 +79,11 @@ impl Sandbox {
         opts: RunOpts,
     ) -> Result<ExecOutput, Error> {
         // Phase 0: no proxy lifecycle yet (NetworkPolicy has no Proxied variant).
+        let kind = Self::detect();
+        let helper_reexec = kind == SandboxKind::LinuxSeccomp && !policy.is_full_access();
         let ctx = TransformCtx::default();
         let req = self.transform(&cmd, policy, &ctx)?;
-        spawn::spawn_and_capture(req, &opts).await
+        spawn::spawn_and_capture(req, &opts, helper_reexec).await
     }
 }
 

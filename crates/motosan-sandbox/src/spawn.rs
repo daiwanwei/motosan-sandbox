@@ -1,7 +1,6 @@
 //! Spawn a `SpawnRequest` with tokio and capture its output. Mechanical — all
 //! policy decisions were already made by `transform()`. See design §8.
 
-use std::ffi::OsStr;
 use std::process::Stdio;
 
 use tokio::io::AsyncReadExt;
@@ -37,6 +36,7 @@ async fn sleep_for(d: Option<std::time::Duration>) {
 pub(crate) async fn spawn_and_capture(
     req: SpawnRequest,
     opts: &RunOpts,
+    helper_reexec: bool,
 ) -> Result<ExecOutput, Error> {
     let mut command = Command::new(&req.program);
     command
@@ -48,8 +48,6 @@ pub(crate) async fn spawn_and_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-
-    let helper_reexec = req.env.contains_key(OsStr::new(crate::reexec::POLICY_ENV));
 
     #[cfg(unix)]
     if helper_reexec {
@@ -155,7 +153,7 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn captures_stdout_and_exit_code() {
-        let out = spawn_and_capture(req("/bin/echo", &["hello"]), &RunOpts::default())
+        let out = spawn_and_capture(req("/bin/echo", &["hello"]), &RunOpts::default(), false)
             .await
             .unwrap();
         assert_eq!(out.exit_code, Some(0));
@@ -166,9 +164,13 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn nonzero_exit_is_captured() {
-        let out = spawn_and_capture(req("/bin/sh", &["-c", "exit 3"]), &RunOpts::default())
-            .await
-            .unwrap();
+        let out = spawn_and_capture(
+            req("/bin/sh", &["-c", "exit 3"]),
+            &RunOpts::default(),
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.exit_code, Some(3));
     }
 
@@ -179,7 +181,7 @@ mod tests {
             timeout: Some(Duration::from_millis(200)),
             ..Default::default()
         };
-        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts)
+        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts, false)
             .await
             .unwrap();
         assert!(out.timed_out);
@@ -192,7 +194,7 @@ mod tests {
             max_output_bytes: 4,
             ..Default::default()
         };
-        let out = spawn_and_capture(req("/bin/echo", &["abcdefgh"]), &opts)
+        let out = spawn_and_capture(req("/bin/echo", &["abcdefgh"]), &opts, false)
             .await
             .unwrap();
         assert_eq!(out.stdout.len(), 4);
@@ -200,10 +202,37 @@ mod tests {
 
     #[tokio::test]
     async fn missing_program_is_spawn_error() {
-        let err = spawn_and_capture(req("/no/such/binary", &[]), &RunOpts::default())
+        let err = spawn_and_capture(req("/no/such/binary", &[]), &RunOpts::default(), false)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Spawn(_)));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn helper_env_alone_does_not_enable_helper_mode() {
+        let mut request = req("/bin/sh", &["-c", "exit 121"]);
+        request.env.insert(
+            crate::reexec::POLICY_ENV.into(),
+            "caller-controlled value".into(),
+        );
+        let out = spawn_and_capture(request, &RunOpts::default(), false)
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, Some(121));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn helper_mode_classifies_reserved_code_with_stderr() {
+        let err = spawn_and_capture(
+            req("/bin/sh", &["-c", "echo helper boom >&2; exit 121"]),
+            &RunOpts::default(),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::NotEnforced(msg) if msg.contains("helper boom")));
     }
 
     #[tokio::test]
@@ -219,7 +248,7 @@ mod tests {
         };
         // Without cancellation this sleep would hang for 5s; cancel must kill it
         // promptly and the run must not be flagged as a timeout.
-        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts)
+        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts, false)
             .await
             .unwrap();
         assert!(!out.timed_out);
