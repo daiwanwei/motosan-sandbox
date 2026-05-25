@@ -1,0 +1,15 @@
+(version 1)
+(deny default)
+
+; --- process & IPC basics needed to exec almost anything ---
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow sysctl-read)
+(allow mach-lookup)
+
+; --- whole filesystem is READABLE; writes are governed by appended rules ---
+(allow file-read*)
+
+; --- always allow writing to the bit bucket ---
+(allow file-write-data (literal "/dev/null"))
