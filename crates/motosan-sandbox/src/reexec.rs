@@ -4,11 +4,12 @@
 //! seccomp) lives in `linux.rs` (`#[cfg(target_os = "linux")]`).
 
 use crate::error::Error;
+use crate::policy::SandboxPolicy;
+use std::path::PathBuf;
 
 /// `argv[0]` the parent sets so the re-exec'd process knows it is the helper.
 pub(crate) const HELPER_ARG0: &str = "__motosan_sandbox_helper";
 /// Env var carrying the JSON policy across the re-exec boundary.
-#[allow(dead_code)]
 pub(crate) const POLICY_ENV: &str = "MOTOSAN_SANDBOX_POLICY";
 
 // Reserved exit codes the helper uses to signal setup failure before the target
@@ -60,5 +61,89 @@ mod tests {
         assert!(classify_helper_exit(Some(1)).is_none());
         assert!(classify_helper_exit(Some(127)).is_none());
         assert!(classify_helper_exit(None).is_none()); // killed by signal
+    }
+}
+
+/// The policy as the re-exec'd helper needs it: which roots are writable and
+/// whether network is blocked. Read-everywhere is implicit (Phase 0 semantics).
+/// Serialized to JSON in `POLICY_ENV`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct HelperPolicy {
+    pub writable_roots: Vec<PathBuf>,
+    pub network_blocked: bool,
+}
+
+impl HelperPolicy {
+    /// Build from a `SandboxPolicy`. Errors if the policy uses a feature the
+    /// Linux backend cannot express.
+    pub(crate) fn from_policy(policy: &SandboxPolicy) -> Result<Self, Error> {
+        use crate::policy::NetworkPolicy;
+        let network_blocked = policy.network() == NetworkPolicy::Blocked;
+        let writable_roots = match policy {
+            // DangerFullAccess never reaches the helper (transform passes through).
+            SandboxPolicy::DangerFullAccess => Vec::new(),
+            SandboxPolicy::ReadOnly { .. } => Vec::new(),
+            SandboxPolicy::WorkspaceWrite(w) => {
+                if !w.read_only_subpaths.is_empty() {
+                    // Landlock is allow-only: you cannot carve a read-only hole
+                    // inside a writable root. macOS Seatbelt supports this; Linux
+                    // does not. Fail loud rather than silently under-enforce.
+                    return Err(Error::Unsupported(crate::SandboxKind::LinuxSeccomp));
+                }
+                w.writable_roots.clone()
+            }
+        };
+        Ok(Self {
+            writable_roots,
+            network_blocked,
+        })
+    }
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+    use crate::policy::{NetworkPolicy, WorkspaceWrite};
+
+    #[test]
+    fn workspace_write_maps_roots_and_network() {
+        let p = SandboxPolicy::WorkspaceWrite(
+            WorkspaceWrite::new(vec!["/ws".into()]).network(NetworkPolicy::Blocked),
+        );
+        let h = HelperPolicy::from_policy(&p).unwrap();
+        assert_eq!(h.writable_roots, vec![PathBuf::from("/ws")]);
+        assert!(h.network_blocked);
+    }
+
+    #[test]
+    fn read_only_maps_to_no_roots() {
+        let h = HelperPolicy::from_policy(&SandboxPolicy::ReadOnly {
+            network: NetworkPolicy::Allowed,
+        })
+        .unwrap();
+        assert!(h.writable_roots.is_empty());
+        assert!(!h.network_blocked);
+    }
+
+    #[test]
+    fn read_only_subpaths_rejected() {
+        let p = SandboxPolicy::WorkspaceWrite(
+            WorkspaceWrite::new(vec!["/ws".into()]).read_only("/ws/secret"),
+        );
+        assert!(matches!(
+            HelperPolicy::from_policy(&p),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn json_round_trips() {
+        let h = HelperPolicy {
+            writable_roots: vec!["/a".into(), "/b".into()],
+            network_blocked: true,
+        };
+        let s = serde_json::to_string(&h).unwrap();
+        let back: HelperPolicy = serde_json::from_str(&s).unwrap();
+        assert_eq!(h, back);
     }
 }
