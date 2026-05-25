@@ -16,7 +16,7 @@ cancellation = ["dep:tokio-util"]
 [dependencies]
 thiserror = "2"
 tracing = "0.1"
-tokio = { version = "1", features = ["process", "io-util", "time", "rt"] }
+tokio = { version = "1", features = ["macros", "process", "io-util", "time", "rt"] }
 tokio-util = { version = "0.7", optional = true }
 
 [dev-dependencies]
