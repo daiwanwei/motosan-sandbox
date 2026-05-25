@@ -56,10 +56,6 @@ fn linux_builds_reexec_request() {
             std::ffi::OsString::from("hi")
         ]
     );
-    assert_eq!(
-        req.arg0,
-        Some(std::ffi::OsString::from("__motosan_sandbox_helper"))
-    );
     assert!(req
         .env
         .contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));

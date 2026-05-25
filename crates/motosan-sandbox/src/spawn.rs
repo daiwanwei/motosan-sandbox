@@ -49,9 +49,11 @@ pub(crate) async fn spawn_and_capture(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    let helper_reexec = req.env.contains_key(OsStr::new(crate::reexec::POLICY_ENV));
+
     #[cfg(unix)]
-    if let Some(arg0) = &req.arg0 {
-        command.arg0(arg0);
+    if helper_reexec {
+        command.arg0(crate::reexec::HELPER_ARG0);
     }
 
     let mut child = command.spawn().map_err(Error::Spawn)?;
@@ -107,10 +109,10 @@ pub(crate) async fn spawn_and_capture(
     let stderr = err_task.await.unwrap_or_default();
 
     // Reserved exit codes only mean "helper setup failed" for a Linux helper
-    // re-exec (arg0 == sentinel). For any other spawn, 121–123 is a genuine
-    // command result and must pass through unchanged.
-    if req.arg0.as_deref() == Some(OsStr::new(crate::reexec::HELPER_ARG0)) {
-        if let Some(err) = crate::reexec::classify_helper_exit(exit_code) {
+    // re-exec. For any other spawn, 121–123 is a genuine command result and
+    // must pass through unchanged.
+    if helper_reexec {
+        if let Some(err) = crate::reexec::classify_helper_exit(exit_code, &stderr) {
             return Err(err);
         }
     }
@@ -147,7 +149,6 @@ mod tests {
             args: args.iter().map(|s| (*s).into()).collect(),
             cwd: std::env::temp_dir(),
             env: BTreeMap::new(),
-            arg0: None,
         }
     }
 

@@ -155,27 +155,48 @@ async fn network_blocked() {
     // socket(AF_INET)+connect → our seccomp denies socket(AF_INET) → EPERM →
     // nonzero. `/bin/sh` on Debian is dash, which has NO /dev/tcp, so it would
     // exit nonzero for the wrong reason (feature absent, not network blocked).
-    // bash is present in the debian rust image and on ubuntu-latest.
+    // Bind a real listener first: connecting to a closed port would also fail
+    // without seccomp, giving a false positive.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let script = format!("exec 3<>/dev/tcp/127.0.0.1/{port}");
+
     let mut env = BTreeMap::new();
     if let Some(p) = std::env::var_os("PATH") {
         env.insert("PATH".into(), p);
     }
-    let cmd = SandboxCommand {
+    let cmd = || SandboxCommand {
         program: "/bin/bash".into(),
-        args: vec!["-c".into(), "exec 3<>/dev/tcp/127.0.0.1/9".into()],
+        args: vec!["-c".into(), script.clone().into()],
         cwd: ws.clone(),
-        env,
+        env: env.clone(),
     };
-    let out = sb
+
+    let allowed = sb
         .run(
-            cmd,
+            cmd(),
+            &ws_policy(&ws, NetworkPolicy::Allowed),
+            RunOpts::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        allowed.exit_code,
+        Some(0),
+        "control connect should succeed when network is allowed; stderr: {}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+
+    let blocked = sb
+        .run(
+            cmd(),
             &ws_policy(&ws, NetworkPolicy::Blocked),
             RunOpts::default(),
         )
         .await
         .unwrap();
     assert_ne!(
-        out.exit_code,
+        blocked.exit_code,
         Some(0),
         "network egress should be blocked (socket(AF_INET) denied)"
     );

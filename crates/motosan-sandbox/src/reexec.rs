@@ -22,18 +22,29 @@ pub(crate) const HELPER_EXIT_EXEC_FAILED: i32 = 123;
 
 /// Map a child exit code to a helper-setup `Error`, or `None` if the code is a
 /// genuine command result.
-pub(crate) fn classify_helper_exit(code: Option<i32>) -> Option<Error> {
+pub(crate) fn classify_helper_exit(code: Option<i32>, stderr: &[u8]) -> Option<Error> {
+    let detail = helper_stderr_detail(stderr);
     match code {
-        Some(HELPER_EXIT_NOT_ENFORCED) => Some(Error::NotEnforced(
-            "landlock/seccomp could not be enforced (see child stderr)".into(),
-        )),
-        Some(HELPER_EXIT_BAD_POLICY) => Some(Error::Transform(
-            "sandbox helper rejected the policy (see child stderr)".into(),
-        )),
-        Some(HELPER_EXIT_EXEC_FAILED) => Some(Error::Transform(
-            "sandbox helper failed to exec the target (see child stderr)".into(),
-        )),
+        Some(HELPER_EXIT_NOT_ENFORCED) => Some(Error::NotEnforced(format!(
+            "landlock/seccomp could not be enforced{detail}"
+        ))),
+        Some(HELPER_EXIT_BAD_POLICY) => Some(Error::Transform(format!(
+            "sandbox helper rejected the policy{detail}"
+        ))),
+        Some(HELPER_EXIT_EXEC_FAILED) => Some(Error::Transform(format!(
+            "sandbox helper failed to exec the target{detail}"
+        ))),
         _ => None,
+    }
+}
+
+fn helper_stderr_detail(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        String::new()
+    } else {
+        format!(": {stderr}")
     }
 }
 
@@ -44,25 +55,25 @@ mod tests {
     #[test]
     fn classifies_reserved_codes() {
         assert!(matches!(
-            classify_helper_exit(Some(121)),
+            classify_helper_exit(Some(121), b"motosan-sandbox: landlock failed"),
             Some(Error::NotEnforced(_))
         ));
         assert!(matches!(
-            classify_helper_exit(Some(122)),
+            classify_helper_exit(Some(122), b"bad policy"),
             Some(Error::Transform(_))
         ));
         assert!(matches!(
-            classify_helper_exit(Some(123)),
+            classify_helper_exit(Some(123), b"exec failed"),
             Some(Error::Transform(_))
         ));
     }
 
     #[test]
     fn passes_through_normal_codes() {
-        assert!(classify_helper_exit(Some(0)).is_none());
-        assert!(classify_helper_exit(Some(1)).is_none());
-        assert!(classify_helper_exit(Some(127)).is_none());
-        assert!(classify_helper_exit(None).is_none()); // killed by signal
+        assert!(classify_helper_exit(Some(0), b"").is_none());
+        assert!(classify_helper_exit(Some(1), b"").is_none());
+        assert!(classify_helper_exit(Some(127), b"").is_none());
+        assert!(classify_helper_exit(None, b"").is_none()); // killed by signal
     }
 }
 
@@ -166,8 +177,8 @@ pub(crate) fn build_reexec_request(
         env.insert(crate::NETWORK_DISABLED_ENV.into(), "1".into());
     }
 
-    // argv layout the helper expects: [<real program>, <real args>...]; arg0 is
-    // overridden to the sentinel so run_if_invoked() recognizes the re-exec.
+    // argv layout the helper expects: [<real program>, <real args>...].
+    // `spawn` recognizes POLICY_ENV and overrides argv[0] to the sentinel.
     let mut args: Vec<OsString> = Vec::with_capacity(1 + cmd.args.len());
     args.push(cmd.program.clone());
     args.extend(cmd.args.iter().cloned());
@@ -177,7 +188,6 @@ pub(crate) fn build_reexec_request(
         args,
         cwd: cmd.cwd.clone(),
         env,
-        arg0: Some(HELPER_ARG0.into()),
     })
 }
 
@@ -204,7 +214,6 @@ mod build_tests {
         let req = build_reexec_request(&cmd(), &helper, Path::new("/usr/bin/myhelper")).unwrap();
 
         assert_eq!(req.program, OsString::from("/usr/bin/myhelper"));
-        assert_eq!(req.arg0, Some(OsString::from(HELPER_ARG0)));
         assert_eq!(req.args[0], OsString::from("/bin/echo"));
         assert_eq!(req.args[1], OsString::from("hi"));
         assert!(req.env.contains_key(std::ffi::OsStr::new(POLICY_ENV)));

@@ -73,7 +73,6 @@ fn passthrough(cmd: &SandboxCommand, policy: &SandboxPolicy) -> SpawnRequest {
         args: cmd.args.clone(),
         cwd: cmd.cwd.clone(),
         env: build_env(cmd, policy),
-        arg0: None,
     }
 }
 

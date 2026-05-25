@@ -90,7 +90,6 @@ pub(crate) fn transform_seatbelt(
         args,
         cwd: cmd.cwd.clone(),
         env: build_env(cmd, policy),
-        arg0: None,
     })
 }
 

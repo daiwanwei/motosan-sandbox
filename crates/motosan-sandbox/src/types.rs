@@ -81,9 +81,6 @@ pub struct SpawnRequest {
     pub args: Vec<OsString>,
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
-    /// Override the child's `argv[0]`. Used by the Linux re-exec helper to set
-    /// the sentinel; `None` means default (the program path).
-    pub arg0: Option<OsString>,
 }
 
 #[cfg(test)]
