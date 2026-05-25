@@ -4,6 +4,8 @@
 //! (until then [`Sandbox::run`] returns [`Error::Unsupported`] on Linux).
 
 mod error;
+mod policy;
 mod types;
 
 pub use error::Error;
+pub use policy::{NetworkPolicy, SandboxPolicy, WorkspaceWrite};
