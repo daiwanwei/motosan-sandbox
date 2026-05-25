@@ -16,10 +16,10 @@ path = "src/bin/motosan-sandbox-helper.rs"
 default = []
 # Optional capability — mirrors motosan-agent-loop's cancellation feature.
 cancellation = ["dep:tokio-util"]
-# Allowlist network proxy (Phase 2). Pulls in the leaf proxy crate; enables
-# NetworkPolicy::Proxied enforcement on macOS (Seatbelt). Linux Proxied still
-# returns Error::Unsupported (until Phase 3).
-proxy = ["dep:motosan-sandbox-proxy"]
+# Allowlist network proxy (Phase 2/3). Pulls in the leaf proxy crate; enables
+# NetworkPolicy::Proxied enforcement on macOS (Seatbelt) and Linux
+# (bwrap netns + transparent loopback bridge — Phase 3).
+proxy = ["dep:motosan-sandbox-proxy", "dep:tempfile", "tokio/net"]
 
 [dependencies]
 thiserror = "2"
@@ -29,6 +29,9 @@ tokio-util = { version = "0.7", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 motosan-sandbox-proxy = { version = "0.1", path = "../motosan-sandbox-proxy", optional = true }
+# Phase 3 host-side proxy bridge needs a per-run UDS temp dir (auto-removed
+# on Drop, so the RAII guard tears the socket files down on every exit path).
+tempfile = { version = "3", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.5"

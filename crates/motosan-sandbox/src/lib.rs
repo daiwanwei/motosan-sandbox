@@ -8,6 +8,8 @@
 mod denial;
 mod error;
 mod policy;
+#[cfg(feature = "proxy")]
+mod proxy_bridge;
 mod reexec;
 mod spawn;
 mod transform;
