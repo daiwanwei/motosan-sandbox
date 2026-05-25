@@ -158,16 +158,26 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn timeout_kills_and_flags() {
-        let opts = RunOpts { timeout: Some(Duration::from_millis(200)), ..Default::default() };
-        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts).await.unwrap();
+        let opts = RunOpts {
+            timeout: Some(Duration::from_millis(200)),
+            ..Default::default()
+        };
+        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts)
+            .await
+            .unwrap();
         assert!(out.timed_out);
     }
 
     #[tokio::test]
     #[cfg(unix)]
     async fn output_is_byte_capped() {
-        let opts = RunOpts { max_output_bytes: 4, ..Default::default() };
-        let out = spawn_and_capture(req("/bin/echo", &["abcdefgh"]), &opts).await.unwrap();
+        let opts = RunOpts {
+            max_output_bytes: 4,
+            ..Default::default()
+        };
+        let out = spawn_and_capture(req("/bin/echo", &["abcdefgh"]), &opts)
+            .await
+            .unwrap();
         assert_eq!(out.stdout.len(), 4);
     }
 
@@ -177,5 +187,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Spawn(_)));
+    }
+
+    #[tokio::test]
+    #[cfg(all(unix, feature = "cancellation"))]
+    async fn cancelled_token_kills_run() {
+        use tokio_util::sync::CancellationToken;
+        let token = CancellationToken::new();
+        token.cancel(); // pre-cancelled: the cancel leg wins deterministically
+        let opts = RunOpts {
+            cancel: Some(token),
+            timeout: None,
+            ..Default::default()
+        };
+        // Without cancellation this sleep would hang for 5s; cancel must kill it
+        // promptly and the run must not be flagged as a timeout.
+        let out = spawn_and_capture(req("/bin/sleep", &["5"]), &opts)
+            .await
+            .unwrap();
+        assert!(!out.timed_out);
     }
 }

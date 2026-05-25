@@ -36,17 +36,19 @@ pub(crate) fn build_policy(policy: &SandboxPolicy) -> (String, Vec<Param>) {
         SandboxPolicy::WorkspaceWrite(w) => {
             for (i, root) in w.writable_roots.iter().enumerate() {
                 let name = format!("WRITABLE_ROOT_{i}");
-                sections.push(format!(
-                    "(allow file-write* (subpath (param \"{name}\")))"
-                ));
-                params.push(Param { name, value: path_str(root) });
+                sections.push(format!("(allow file-write* (subpath (param \"{name}\")))"));
+                params.push(Param {
+                    name,
+                    value: path_str(root),
+                });
             }
             for (i, ro) in w.read_only_subpaths.iter().enumerate() {
                 let name = format!("READONLY_SUB_{i}");
-                sections.push(format!(
-                    "(deny file-write* (subpath (param \"{name}\")))"
-                ));
-                params.push(Param { name, value: path_str(ro) });
+                sections.push(format!("(deny file-write* (subpath (param \"{name}\")))"));
+                params.push(Param {
+                    name,
+                    value: path_str(ro),
+                });
             }
         }
     }
@@ -118,8 +120,7 @@ mod tests {
 
     #[test]
     fn workspace_write_emits_writable_and_readonly_params() {
-        let w = WorkspaceWrite::new(vec!["/ws".into(), "/cache".into()])
-            .read_only("/ws/secrets");
+        let w = WorkspaceWrite::new(vec!["/ws".into(), "/cache".into()]).read_only("/ws/secrets");
         let (text, params) = build_policy(&SandboxPolicy::WorkspaceWrite(w));
 
         assert!(text.contains("(allow file-write* (subpath (param \"WRITABLE_ROOT_0\")))"));
@@ -127,8 +128,26 @@ mod tests {
         assert!(text.contains("(deny file-write* (subpath (param \"READONLY_SUB_0\")))"));
 
         assert_eq!(params.len(), 3);
-        assert_eq!(params[0], Param { name: "WRITABLE_ROOT_0".into(), value: "/ws".into() });
-        assert_eq!(params[1], Param { name: "WRITABLE_ROOT_1".into(), value: "/cache".into() });
-        assert_eq!(params[2], Param { name: "READONLY_SUB_0".into(), value: "/ws/secrets".into() });
+        assert_eq!(
+            params[0],
+            Param {
+                name: "WRITABLE_ROOT_0".into(),
+                value: "/ws".into()
+            }
+        );
+        assert_eq!(
+            params[1],
+            Param {
+                name: "WRITABLE_ROOT_1".into(),
+                value: "/cache".into()
+            }
+        );
+        assert_eq!(
+            params[2],
+            Param {
+                name: "READONLY_SUB_0".into(),
+                value: "/ws/secrets".into()
+            }
+        );
     }
 }

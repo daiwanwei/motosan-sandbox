@@ -86,16 +86,27 @@ mod tests {
     // per-platform integration tests.
     #[test]
     fn build_env_sets_marker_when_network_blocked() {
-        let env = build_env(&cmd(), &SandboxPolicy::ReadOnly { network: NetworkPolicy::Blocked });
+        let env = build_env(
+            &cmd(),
+            &SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Blocked,
+            },
+        );
         assert_eq!(
-            env.get(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)).map(|v| v.as_os_str()),
+            env.get(std::ffi::OsStr::new(NETWORK_DISABLED_ENV))
+                .map(|v| v.as_os_str()),
             Some(std::ffi::OsStr::new("1"))
         );
     }
 
     #[test]
     fn build_env_omits_marker_when_network_allowed() {
-        let env = build_env(&cmd(), &SandboxPolicy::ReadOnly { network: NetworkPolicy::Allowed });
+        let env = build_env(
+            &cmd(),
+            &SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Allowed,
+            },
+        );
         assert!(!env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
     }
 }

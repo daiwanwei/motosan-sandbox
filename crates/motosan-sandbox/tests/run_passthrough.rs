@@ -16,7 +16,11 @@ fn cmd(program: &str, args: &[&str]) -> SandboxCommand {
 async fn run_full_access_executes_command() {
     let sb = Sandbox::new();
     let out = sb
-        .run(cmd("/bin/echo", &["from-run"]), &SandboxPolicy::DangerFullAccess, RunOpts::default())
+        .run(
+            cmd("/bin/echo", &["from-run"]),
+            &SandboxPolicy::DangerFullAccess,
+            RunOpts::default(),
+        )
         .await
         .expect("run succeeds");
     assert_eq!(out.exit_code, Some(0));

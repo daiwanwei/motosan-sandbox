@@ -114,9 +114,15 @@ mod tests {
 
     #[test]
     fn network_helper_maps_each_variant() {
-        assert_eq!(SandboxPolicy::DangerFullAccess.network(), NetworkPolicy::Allowed);
         assert_eq!(
-            SandboxPolicy::ReadOnly { network: NetworkPolicy::Blocked }.network(),
+            SandboxPolicy::DangerFullAccess.network(),
+            NetworkPolicy::Allowed
+        );
+        assert_eq!(
+            SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Blocked
+            }
+            .network(),
             NetworkPolicy::Blocked
         );
         let w = SandboxPolicy::WorkspaceWrite(
@@ -128,6 +134,9 @@ mod tests {
     #[test]
     fn is_full_access_only_for_danger() {
         assert!(SandboxPolicy::DangerFullAccess.is_full_access());
-        assert!(!SandboxPolicy::ReadOnly { network: NetworkPolicy::Blocked }.is_full_access());
+        assert!(!SandboxPolicy::ReadOnly {
+            network: NetworkPolicy::Blocked
+        }
+        .is_full_access());
     }
 }

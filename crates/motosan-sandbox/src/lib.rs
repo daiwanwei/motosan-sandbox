@@ -13,6 +13,8 @@ mod types;
 #[cfg(target_os = "macos")]
 mod seatbelt;
 
+pub mod helper;
+
 pub use denial::is_likely_sandbox_denied;
 pub use error::Error;
 pub use policy::{NetworkPolicy, SandboxPolicy, WorkspaceWrite};

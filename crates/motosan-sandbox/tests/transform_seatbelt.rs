@@ -21,7 +21,9 @@ fn seatbelt_argv_wraps_sandbox_exec() {
     let policy = SandboxPolicy::WorkspaceWrite(
         WorkspaceWrite::new(vec!["/tmp/ws".into()]).network(NetworkPolicy::Blocked),
     );
-    let req = sb.transform(&cmd(), &policy, &TransformCtx::default()).unwrap();
+    let req = sb
+        .transform(&cmd(), &policy, &TransformCtx::default())
+        .unwrap();
 
     assert_eq!(req.program, OsString::from("/usr/bin/sandbox-exec"));
     // first two args are the inline policy
@@ -35,15 +37,23 @@ fn seatbelt_argv_wraps_sandbox_exec() {
         w[0] == *std::ffi::OsStr::new("-D")
             && w[1] == *std::ffi::OsStr::new("WRITABLE_ROOT_0=/tmp/ws")
     });
-    assert!(has_root, "expected -D WRITABLE_ROOT_0=/tmp/ws in {:?}", req.args);
+    assert!(
+        has_root,
+        "expected -D WRITABLE_ROOT_0=/tmp/ws in {:?}",
+        req.args
+    );
 
     // the real command appears after the "--" terminator
-    let dd = req.args.iter().position(|a| a == &OsString::from("--")).unwrap();
+    let dd = req
+        .args
+        .iter()
+        .position(|a| a == &OsString::from("--"))
+        .unwrap();
     assert_eq!(req.args[dd + 1], OsString::from("/bin/echo"));
     assert_eq!(req.args[dd + 2], OsString::from("hello"));
 
     // network blocked ⇒ marker env present
-    assert!(req.env.contains_key(std::ffi::OsStr::new(
-        motosan_sandbox::NETWORK_DISABLED_ENV
-    )));
+    assert!(req
+        .env
+        .contains_key(std::ffi::OsStr::new(motosan_sandbox::NETWORK_DISABLED_ENV)));
 }

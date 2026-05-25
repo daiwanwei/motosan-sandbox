@@ -17,12 +17,18 @@ fn cmd(program: &str, args: &[&str]) -> SandboxCommand {
 fn danger_full_access_is_passthrough() {
     let sb = Sandbox::new();
     let req = sb
-        .transform(&cmd("echo", &["hi"]), &SandboxPolicy::DangerFullAccess, &TransformCtx::default())
+        .transform(
+            &cmd("echo", &["hi"]),
+            &SandboxPolicy::DangerFullAccess,
+            &TransformCtx::default(),
+        )
         .expect("full access transforms");
     assert_eq!(req.program, std::ffi::OsString::from("echo"));
     assert_eq!(req.args, vec![std::ffi::OsString::from("hi")]);
     // Full access ⇒ network allowed ⇒ no disabled marker.
-    assert!(!req.env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
+    assert!(!req
+        .env
+        .contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
 }
 
 #[cfg(target_os = "linux")]
@@ -32,9 +38,14 @@ fn linux_is_unsupported_in_phase0() {
     let err = sb
         .transform(
             &cmd("echo", &["hi"]),
-            &SandboxPolicy::ReadOnly { network: NetworkPolicy::Blocked },
+            &SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Blocked,
+            },
             &TransformCtx::default(),
         )
         .unwrap_err();
-    assert!(matches!(err, motosan_sandbox::Error::Unsupported(SandboxKind::LinuxSeccomp)));
+    assert!(matches!(
+        err,
+        motosan_sandbox::Error::Unsupported(SandboxKind::LinuxSeccomp)
+    ));
 }
