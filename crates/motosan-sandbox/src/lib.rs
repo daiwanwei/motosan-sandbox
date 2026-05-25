@@ -6,6 +6,7 @@
 mod denial;
 mod error;
 mod policy;
+mod reexec;
 mod spawn;
 mod transform;
 mod types;

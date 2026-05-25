@@ -1,6 +1,7 @@
 //! Spawn a `SpawnRequest` with tokio and capture its output. Mechanical — all
 //! policy decisions were already made by `transform()`. See design §8.
 
+use std::ffi::OsStr;
 use std::process::Stdio;
 
 use tokio::io::AsyncReadExt;
@@ -47,6 +48,11 @@ pub(crate) async fn spawn_and_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+
+    #[cfg(unix)]
+    if let Some(arg0) = &req.arg0 {
+        command.arg0(arg0);
+    }
 
     let mut child = command.spawn().map_err(Error::Spawn)?;
 
@@ -100,6 +106,15 @@ pub(crate) async fn spawn_and_capture(
     let stdout = out_task.await.unwrap_or_default();
     let stderr = err_task.await.unwrap_or_default();
 
+    // Reserved exit codes only mean "helper setup failed" for a Linux helper
+    // re-exec (arg0 == sentinel). For any other spawn, 121–123 is a genuine
+    // command result and must pass through unchanged.
+    if req.arg0.as_deref() == Some(OsStr::new(crate::reexec::HELPER_ARG0)) {
+        if let Some(err) = crate::reexec::classify_helper_exit(exit_code) {
+            return Err(err);
+        }
+    }
+
     Ok(ExecOutput {
         exit_code,
         signal,
@@ -132,6 +147,7 @@ mod tests {
             args: args.iter().map(|s| (*s).into()).collect(),
             cwd: std::env::temp_dir(),
             env: BTreeMap::new(),
+            arg0: None,
         }
     }
 
