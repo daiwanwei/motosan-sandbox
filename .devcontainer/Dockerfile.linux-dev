@@ -1,0 +1,12 @@
+# Linux iteration image for motosan-sandbox Phase 1 dev loop.
+# Run with: --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+# (Docker's default seccomp blocks landlock_* syscalls -> Landlock reports NotEnforced.)
+FROM rust:1.95-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates curl netcat-openbsd \
+  && rm -rf /var/lib/apt/lists/*
+RUN rustup component add clippy rustfmt
+WORKDIR /work
+ENV CARGO_TARGET_DIR=/cargo-target
+ENV CARGO_HOME=/cargo-home
+CMD ["bash"]
