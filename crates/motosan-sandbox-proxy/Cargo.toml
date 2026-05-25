@@ -1,0 +1,16 @@
+[package]
+name = "motosan-sandbox-proxy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Local allowlist HTTP CONNECT proxy for motosan-sandbox"
+repository = "https://github.com/motosan-dev/motosan-sandbox"
+keywords = ["sandbox", "proxy", "http", "connect", "allowlist"]
+categories = ["network-programming"]
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "rt", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros", "time"] }

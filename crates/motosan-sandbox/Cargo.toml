@@ -16,6 +16,10 @@ path = "src/bin/motosan-sandbox-helper.rs"
 default = []
 # Optional capability — mirrors motosan-agent-loop's cancellation feature.
 cancellation = ["dep:tokio-util"]
+# Allowlist network proxy (Phase 2). Pulls in the leaf proxy crate; enables
+# NetworkPolicy::Proxied enforcement on macOS (Seatbelt). Linux Proxied still
+# returns Error::Unsupported (until Phase 3).
+proxy = ["dep:motosan-sandbox-proxy"]
 
 [dependencies]
 thiserror = "2"
@@ -24,6 +28,7 @@ tokio = { version = "1", features = ["macros", "process", "io-util", "time", "rt
 tokio-util = { version = "0.7", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+motosan-sandbox-proxy = { version = "0.1", path = "../motosan-sandbox-proxy", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.5"
