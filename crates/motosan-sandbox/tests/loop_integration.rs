@@ -175,7 +175,10 @@ async fn engine_dispatches_tool_and_runs_inside_workspace() {
     );
 
     let result = agent
-        .run(llm as Arc<dyn LlmClient>, vec![Message::user("write a file")])
+        .run(
+            llm as Arc<dyn LlmClient>,
+            vec![Message::user("write a file")],
+        )
         .result()
         .await
         .unwrap();
@@ -251,8 +254,10 @@ impl Extension for SandboxApprovalExtension {
         result: &ToolResult,
         _ctx: &mut HookCtx<'_>,
     ) -> Result<FlowDecision, ExtError> {
-        let denied =
-            result.is_error && result.as_text().is_some_and(|t| t.contains(DENIED_SENTINEL));
+        let denied = result.is_error
+            && result
+                .as_text()
+                .is_some_and(|t| t.contains(DENIED_SENTINEL));
         if denied {
             self.injections.fetch_add(1, Ordering::SeqCst);
             Ok(FlowDecision::Inject(Message::user(
@@ -326,7 +331,6 @@ async fn denied_then_reissued_escalated_succeeds() {
         "escalated (DangerFullAccess) retry should have written the file"
     );
 }
-
 
 // Task 5: Defer → ExtensionResume plumbing.
 
@@ -440,5 +444,8 @@ async fn deferred_call_resolves_via_extension_resume() {
         result.answer, "done",
         "ExtensionResume resolved the deferred call"
     );
-    assert!(target.exists(), "the gated command ran (via the resume task)");
+    assert!(
+        target.exists(),
+        "the gated command ran (via the resume task)"
+    );
 }

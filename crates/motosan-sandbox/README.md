@@ -60,3 +60,21 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 - **macOS paths are resolved.** Canonicalize writable roots (`/var` →
   `/private/var`) before building a policy.
 - macOS `sandbox-exec` is deprecated by Apple but still functional; tracked risk.
+
+## Using with motosan-agent-loop (validated by the integration spike)
+
+`motosan-sandbox` plugs into `motosan-agent-loop` with no loop-core changes:
+expose execution as a `Tool` (`call()` → `Sandbox::run()`) and put approval in a
+consumer `Extension`. See `tests/loop_integration.rs` for the proven pattern.
+
+Three contract notes the spike surfaced:
+- **Escalation is reissue, not Defer.** A denied command → inject a hint → the
+  model re-calls with `escalated:true` → the same Tool runs `DangerFullAccess`.
+  `ToolDecision::Defer` *skips* the tool, so reserve it for human-gating.
+- **Encode the denial in the `ToolResult`.** An `Extension` only sees a
+  `ToolResult`, not the `ExecOutput`, so the Tool must compute
+  `is_likely_sandbox_denied` and stamp the verdict (the spike uses a sentinel).
+- **`Defer` requires an external `.ops(rx)` channel.** Without it, the loop
+  takes the documented "no ops channel" fast-fail path and the deferred slot
+  resolves to an error before any background `AgentOp::ExtensionResume` lands.
+  Pass `agent.run(...).ops(rx).result().await` whenever an extension defers.
