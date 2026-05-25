@@ -55,7 +55,9 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 - **Curate the environment.** `SandboxCommand::env` is passed verbatim; never set
   it to `std::env::vars_os()` — that leaks secrets into the command.
 - **Don't mark `.git` read-only.** It breaks `git commit` inside the sandbox.
-  `read_only_subpaths` is for secret material.
+  `read_only_subpaths` denies *writes* to a subpath; it does **not** hide it
+  from reads (Phase 0 grants whole-filesystem read). Use it to protect mutable
+  state from being overwritten, not to gate access to secrets.
 - **macOS paths are resolved.** Canonicalize writable roots (`/var` →
   `/private/var`) before building a policy.
 - macOS `sandbox-exec` is deprecated by Apple but still functional; tracked risk.
