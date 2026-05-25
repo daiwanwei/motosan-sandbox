@@ -74,7 +74,12 @@ Three contract notes the spike surfaced:
 - **Encode the denial in the `ToolResult`.** An `Extension` only sees a
   `ToolResult`, not the `ExecOutput`, so the Tool must compute
   `is_likely_sandbox_denied` and stamp the verdict (the spike uses a sentinel).
-- **`Defer` requires an external `.ops(rx)` channel.** Without it, the loop
-  takes the documented "no ops channel" fast-fail path and the deferred slot
-  resolves to an error before any background `AgentOp::ExtensionResume` lands.
-  Pass `agent.run(...).ops(rx).result().await` whenever an extension defers.
+- **`Defer` + background `ExtensionResume` needs `.ops(rx)` — and it's
+  version-sensitive.** On published `motosan-agent-loop` 0.22.1 (what the spike
+  built against), resolving a `Defer` via a background-task
+  `AgentOp::ExtensionResume` without an external ops channel aborts with
+  `Defer call '<id>' aborted: no ops channel`; pass
+  `agent.run(...).ops(rx).result().await`. On 0.22.2+ this requirement may not
+  apply (the loop's own resume test passes without `.ops()` there). **Pin to the
+  loop version you ship against and re-verify.** Escalation via *reissue* (note 1)
+  has no such version dependency — prefer it.
