@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::reexec::{
-    HelperPolicy, HELPER_ARG0, HELPER_EXIT_BAD_POLICY, HELPER_EXIT_EXEC_FAILED,
+    HelperMode, HelperPolicy, HELPER_ARG0, HELPER_EXIT_BAD_POLICY, HELPER_EXIT_EXEC_FAILED,
     HELPER_EXIT_NOT_ENFORCED, POLICY_ENV,
 };
 
@@ -42,6 +42,16 @@ pub(crate) fn run_if_invoked() {
         ),
     };
 
+    // Phase 3 modes are wired in Task 6; for now require Landlock so that
+    // any miswired Proxied path fails loud instead of silently no-op'ing.
+    let network_blocked = match helper.mode {
+        HelperMode::Landlock { network_blocked } => network_blocked,
+        HelperMode::ProxiedOuter { .. } | HelperMode::ProxiedInner { .. } => die(
+            HELPER_EXIT_NOT_ENFORCED,
+            "ProxiedOuter/Inner not yet wired (Phase 3 Task 6)",
+        ),
+    };
+
     // 1. no_new_privs (required for seccomp without CAP_SYS_ADMIN).
     if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
         die(
@@ -50,7 +60,7 @@ pub(crate) fn run_if_invoked() {
         );
     }
     // 2. seccomp (network).
-    if helper.network_blocked {
+    if network_blocked {
         if let Err(e) = install_network_seccomp() {
             die(
                 HELPER_EXIT_NOT_ENFORCED,
