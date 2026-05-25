@@ -9,3 +9,6 @@ mod types;
 
 pub use error::Error;
 pub use policy::{NetworkPolicy, SandboxPolicy, WorkspaceWrite};
+pub use types::{
+    ExecOutput, ProxyHandle, RunOpts, SandboxCommand, SandboxKind, SpawnRequest, TransformCtx,
+};
