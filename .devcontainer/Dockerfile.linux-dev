@@ -1,9 +1,18 @@
-# Linux iteration image for motosan-sandbox Phase 1 dev loop.
-# Run with: --security-opt seccomp=unconfined --security-opt apparmor=unconfined
-# (Docker's default seccomp blocks landlock_* syscalls -> Landlock reports NotEnforced.)
+# Linux iteration image for motosan-sandbox.
+#
+# Phase 1 (Landlock + seccomp) run with:
+#   --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+# (Docker's default seccomp blocks landlock_* syscalls → Landlock NotEnforced.)
+#
+# Phase 3 (bwrap netns + transparent proxy bridge) additionally needs an
+# unprivileged user namespace. On Docker-on-Mac (OrbStack/Docker Desktop)
+# nested unprivileged userns frequently doesn't work even with the
+# seccomp/apparmor flags, so use --privileged for the dev loop. Bare Linux
+# CI (ubuntu-latest) does NOT need --privileged.
 FROM rust:1.95-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev ca-certificates curl netcat-openbsd \
+    bubblewrap libcap-dev python3 \
   && rm -rf /var/lib/apt/lists/*
 RUN rustup component add clippy rustfmt
 WORKDIR /work

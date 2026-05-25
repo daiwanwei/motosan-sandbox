@@ -35,19 +35,34 @@ jobs:
       - name: cargo clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
 
-      # Linux sandbox tests use Landlock + seccomp only — NO bubblewrap, NO
-      # unprivileged-userns / AppArmor sysctls needed (unlike bwrap-based sandboxes).
-      # ubuntu-latest's kernel is Landlock-capable, so enforcement runs for real.
+      # Linux Phase 1 sandbox tests use Landlock + seccomp — ubuntu-latest's
+      # kernel is Landlock-capable, so enforcement runs for real with no
+      # special provisioning. Phase 3 (bwrap netns + transparent proxy
+      # bridge) DOES require bwrap + unprivileged user namespaces +
+      # (on Ubuntu 24.04) the AppArmor userns-restriction relaxed. The two
+      # steps below provision that — Linux runners only.
+      - name: install bubblewrap + python3 + curl (Linux Phase 3)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends bubblewrap libcap-dev python3 curl
+
+      - name: enable unprivileged user namespaces (Linux Phase 3)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - name: cargo test (default)
         run: cargo test --all-targets
 
       - name: cargo test (cancellation feature)
         run: cargo test --features cancellation --all-targets
 
-      # Phase 2 proxy: macOS runs the hard-enforcement integration
-      # (`proxy_enforcement.rs` — `direct_connection_blocked_by_seatbelt`);
-      # Linux exercises the `Error::Unsupported` path
-      # (`linux_enforcement.rs::proxied_is_unsupported_on_linux`).
+      # Phase 2 proxy (macOS hard-enforcement) + Phase 3 proxy (Linux bwrap
+      # netns + loopback bridge to the allowlist proxy). On Linux the
+      # `proxied_non_cooperative_egress_is_blocked` test FAILS (does not
+      # skip) if the netns isn't isolating — spec §9 must-enforce guard.
       - name: cargo test (proxy feature)
         run: cargo test --features proxy --all-targets
 

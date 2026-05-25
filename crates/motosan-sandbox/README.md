@@ -77,9 +77,12 @@ Pass **canonical** `writable_roots` — Landlock matches the *resolved* path (e.
 roots before building the policy or writes inside them may be denied. (Same
 requirement as macOS.)
 
-Limitations vs macOS: `read_only_subpaths` is **not supported** on Linux
-(Landlock is allow-only) — a policy that sets it returns `Error::Unsupported`.
-Files remain readable (only writes are confined), same as macOS Phase 0.
+Limitations vs macOS: `read_only_subpaths` is **not supported** on the Linux
+Landlock path (`NetworkPolicy::Blocked` / `Allowed`) — Landlock is allow-only,
+so a Blocked/Allowed policy that sets it returns `Error::Unsupported`. The
+Linux **Proxied** path (Phase 3 / `proxy` feature) uses bwrap mounts and
+*does* enforce `read_only_subpaths` (see "Linux egress allowlist (Phase 3)"
+below). Files remain readable on both paths (only writes are confined).
 
 ## Network allowlist (Phase 2 — `proxy` feature)
 
@@ -120,9 +123,9 @@ Allowlist syntax (block-by-default — empty list denies everything):
 - **macOS — hard.** Seatbelt restricts the child's egress to the local proxy
   port only. A tool that ignores `HTTP_PROXY` and opens a raw socket is blocked
   by the kernel (load-bearing test: `direct_connection_blocked_by_seatbelt`).
-- **Linux — `Error::Unsupported`.** Hard Linux egress control requires a network
-  namespace (deferred to Phase 3). A cooperative bypassable mode is deliberately
-  NOT shipped.
+- **Linux — hard via Phase 3.** See "Linux egress allowlist (Phase 3)" below.
+  Requires system `bwrap`; absent → `Error::Unsupported` (no cooperative
+  bypassable fallback is shipped).
 
 ### Scope (Phase 2)
 
@@ -133,6 +136,58 @@ Allowlist syntax (block-by-default — empty list denies everything):
 - The proxy starts per `run()` (loopback, ephemeral port). Reuse across runs is
   a future optimization.
 - `Proxied` without the `proxy` feature → clear `Error` at `run()`.
+
+## Linux egress allowlist (Phase 3 — `proxy` feature + `bwrap`)
+
+On Linux, `NetworkPolicy::Proxied { allowlist }` is **hard** when system
+`bwrap` is installed: the command runs in a bubblewrap network namespace
+whose only route is a loopback bridge to the same allowlist proxy used on
+macOS. A tool that ignores `HTTP_PROXY` and dials a raw IP gets
+`ENETUNREACH` from the kernel — the netns has no other route.
+
+```
+target (in netns) → 127.0.0.1:<local_port> (lo)
+                  → UnixStream (forked sync bridge)
+                  → host UDS
+                  → tokio host bridge (parent)
+                  → 127.0.0.1:<proxy_port>
+                  → allowlist proxy → upstream
+```
+
+Provisioning the runtime env (CI / Docker):
+
+- `bwrap` on `PATH` (Debian/Ubuntu: `apt install bubblewrap`). Absent →
+  `Sandbox::run` returns `Error::Unsupported(LinuxSeccomp)`.
+- Unprivileged user namespaces enabled
+  (`sysctl kernel.unprivileged_userns_clone=1`).
+- On Ubuntu 24.04, the AppArmor userns restriction relaxed
+  (`sysctl kernel.apparmor_restrict_unprivileged_userns=0`).
+- On Docker-on-Mac (OrbStack/Docker Desktop), nested unprivileged userns
+  often needs `--privileged` (verified by Task 1's
+  `bwrap_viability_probe.rs`). Bare Linux CI runners (e.g. ubuntu-latest)
+  do NOT need `--privileged`.
+
+Filesystem semantics on the Phase 3 (`Proxied` / bwrap) path: whole FS
+read-only via `--ro-bind / /`; `writable_roots` re-enable writes via
+`--bind`; `read_only_subpaths` re-protect a path inside a writable root via
+`--ro-bind <p> <p>`. Unlike the Landlock path, `read_only_subpaths` **is
+enforced** here — bwrap can express it.
+
+Helper internals (load-bearing for security):
+
+- The re-exec'd helper is **synchronous** (no tokio) — the in-netns bridge
+  is a `fork()`ed child using blocking `std::net`. Fork + tokio is unsafe;
+  the host bridge (parent) is tokio.
+- `--unshare-pid` makes the target pid 1 in the new pidns. When it exits,
+  the kernel SIGKILLs the entire pidns — including the bridge child — so
+  there is no reaping race.
+- The inner-stage seccomp filter (`ProxyRouted`) allows `AF_INET`/`AF_INET6`
+  only; `AF_UNIX` is denied for the target so it can't bypass the bridge by
+  talking to the host UDS directly. The bridge child is forked **before**
+  seccomp is installed, so it keeps `AF_UNIX` access.
+- Inner-stage detection is via env (`MOTOSAN_SANDBOX_STAGE=inner`) because
+  bwrap rewrites the inner program's `argv[0]` — our Phase-1 arg0 sentinel
+  does not survive bwrap.
 
 ## Using with motosan-agent-loop (validated by the integration spike)
 

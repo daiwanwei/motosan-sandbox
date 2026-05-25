@@ -305,11 +305,11 @@ fn bwrap_unavailable() -> bool {
 async fn proxied_non_cooperative_egress_is_blocked() {
     let (_g, ws) = workspace();
     let sb = sandbox();
-    let policy = SandboxPolicy::WorkspaceWrite(
-        WorkspaceWrite::new(vec![ws.clone()]).network(NetworkPolicy::Proxied {
+    let policy = SandboxPolicy::WorkspaceWrite(WorkspaceWrite::new(vec![ws.clone()]).network(
+        NetworkPolicy::Proxied {
             allowlist: vec![motosan_sandbox::HostPattern::parse("127.0.0.1")],
-        }),
-    );
+        },
+    ));
     // python3's `socket.connect` ignores HTTP_PROXY — exactly the
     // non-cooperative tool we need to wall off.
     let script = "import socket,sys\n\
@@ -368,11 +368,11 @@ async fn proxied_allowed_host_reachable() {
     }
     let (_g, ws) = workspace();
     let sb = sandbox();
-    let policy = SandboxPolicy::WorkspaceWrite(
-        WorkspaceWrite::new(vec![ws.clone()]).network(NetworkPolicy::Proxied {
+    let policy = SandboxPolicy::WorkspaceWrite(WorkspaceWrite::new(vec![ws.clone()]).network(
+        NetworkPolicy::Proxied {
             allowlist: vec![motosan_sandbox::HostPattern::parse("example.com")],
-        }),
-    );
+        },
+    ));
     let out = sb
         .run(sh("true", &ws), &policy, RunOpts::default())
         .await
@@ -401,11 +401,11 @@ async fn proxied_denied_host_refused() {
     }
     let (_g, ws) = workspace();
     let sb = sandbox();
-    let policy = SandboxPolicy::WorkspaceWrite(
-        WorkspaceWrite::new(vec![ws.clone()]).network(NetworkPolicy::Proxied {
+    let policy = SandboxPolicy::WorkspaceWrite(WorkspaceWrite::new(vec![ws.clone()]).network(
+        NetworkPolicy::Proxied {
             allowlist: vec![motosan_sandbox::HostPattern::parse("example.com")],
-        }),
-    );
+        },
+    ));
     // curl --proxy uses HTTP_PROXY semantics; the denied host is NOT in the
     // allowlist, so the proxy must refuse CONNECT. Use --connect-timeout to
     // bound the wait; -k tolerates self-signed if TLS reaches a peer (it
@@ -488,10 +488,7 @@ async fn proxied_read_only_subpath_denied() {
     );
     let out = sb
         .run(
-            sh(
-                &format!("echo modified > {}/readme", secret.display()),
-                &ws,
-            ),
+            sh(&format!("echo modified > {}/readme", secret.display()), &ws),
             &policy,
             RunOpts::default(),
         )

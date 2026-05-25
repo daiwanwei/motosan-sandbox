@@ -26,11 +26,12 @@ pub(crate) fn find_bwrap() -> Option<PathBuf> {
     })
 }
 
-/// Build the bwrap argv that runs `inner_argv` under a fresh mount + user + pid
-/// + net namespace (spec §5: read-everywhere root, re-enable writable roots,
-/// re-protect read-only carveouts; namespaces give the bwrap mount-FS view +
-/// the hard netns wall). `inner_argv` is the command bwrap runs, typically
-/// `[helper_exe, real_program, real_args...]` — bwrap appends nothing.
+/// Build the bwrap argv that runs `inner_argv` under a fresh set of mount,
+/// user, pid, and net namespaces. (Spec §5: read-everywhere root, re-enable
+/// writable roots, re-protect read-only carveouts; the namespaces provide
+/// the bwrap mount-FS view plus the hard netns wall.) `inner_argv` is the
+/// command bwrap runs, typically `[helper_exe, real_program, real_args...]`;
+/// bwrap appends nothing.
 ///
 /// Working directory: the outer helper is spawned with `current_dir = cmd.cwd`
 /// (by `spawn_and_capture`), and bwrap inherits/preserves that cwd for the
@@ -49,17 +50,18 @@ pub(crate) fn build_bwrap_argv(
     read_only_subpaths: &[PathBuf],
     inner_argv: &[String],
 ) -> Vec<String> {
-    let mut a: Vec<String> = Vec::new();
-    a.push("--new-session".into());
-    a.push("--die-with-parent".into());
-    // FS view: whole FS read-only, then re-enable writes, then re-protect subpaths.
-    a.push("--ro-bind".into());
-    a.push("/".into());
-    a.push("/".into());
-    a.push("--dev".into());
-    a.push("/dev".into());
-    a.push("--proc".into());
-    a.push("/proc".into());
+    let mut a: Vec<String> = vec![
+        "--new-session".into(),
+        "--die-with-parent".into(),
+        // FS view: whole FS read-only, then re-enable writes, then re-protect subpaths.
+        "--ro-bind".into(),
+        "/".into(),
+        "/".into(),
+        "--dev".into(),
+        "/dev".into(),
+        "--proc".into(),
+        "/proc".into(),
+    ];
     // Writable roots, shallow → deep, so deeper rules layer on top.
     let mut roots = writable_roots.to_vec();
     roots.sort_by_key(|p| p.components().count());
