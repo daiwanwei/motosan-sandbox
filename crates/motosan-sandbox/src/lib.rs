@@ -2,3 +2,8 @@
 //!
 //! Phase 0: core types + macOS Seatbelt. Linux enforcement arrives in Phase 1
 //! (until then [`Sandbox::run`] returns [`Error::Unsupported`] on Linux).
+
+mod error;
+mod types;
+
+pub use error::Error;
