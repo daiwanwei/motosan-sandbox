@@ -5,7 +5,9 @@
 
 use crate::error::Error;
 use crate::policy::SandboxPolicy;
-use std::path::PathBuf;
+use crate::types::{SandboxCommand, SpawnRequest};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 /// `argv[0]` the parent sets so the re-exec'd process knows it is the helper.
 pub(crate) const HELPER_ARG0: &str = "__motosan_sandbox_helper";
@@ -145,5 +147,77 @@ mod ipc_tests {
         let s = serde_json::to_string(&h).unwrap();
         let back: HelperPolicy = serde_json::from_str(&s).unwrap();
         assert_eq!(h, back);
+    }
+}
+
+/// Build the `SpawnRequest` that re-execs `helper_exe` to enforce + run `cmd`.
+/// Pure given `helper_exe`; cross-platform so it is unit-testable on macOS.
+pub(crate) fn build_reexec_request(
+    cmd: &SandboxCommand,
+    helper: &HelperPolicy,
+    helper_exe: &Path,
+) -> Result<SpawnRequest, Error> {
+    let policy_json = serde_json::to_string(helper)
+        .map_err(|e| Error::Transform(format!("serialize policy: {e}")))?;
+
+    let mut env = cmd.env.clone();
+    env.insert(POLICY_ENV.into(), policy_json.into());
+    if helper.network_blocked {
+        env.insert(crate::NETWORK_DISABLED_ENV.into(), "1".into());
+    }
+
+    // argv layout the helper expects: [<real program>, <real args>...]; arg0 is
+    // overridden to the sentinel so run_if_invoked() recognizes the re-exec.
+    let mut args: Vec<OsString> = Vec::with_capacity(1 + cmd.args.len());
+    args.push(cmd.program.clone());
+    args.extend(cmd.args.iter().cloned());
+
+    Ok(SpawnRequest {
+        program: helper_exe.as_os_str().to_os_string(),
+        args,
+        cwd: cmd.cwd.clone(),
+        env,
+        arg0: Some(HELPER_ARG0.into()),
+    })
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn cmd() -> SandboxCommand {
+        SandboxCommand {
+            program: "/bin/echo".into(),
+            args: vec!["hi".into()],
+            cwd: "/tmp".into(),
+            env: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn builds_reexec_argv_and_env() {
+        let helper = HelperPolicy {
+            writable_roots: vec!["/ws".into()],
+            network_blocked: true,
+        };
+        let req = build_reexec_request(&cmd(), &helper, Path::new("/usr/bin/myhelper")).unwrap();
+
+        assert_eq!(req.program, OsString::from("/usr/bin/myhelper"));
+        assert_eq!(req.arg0, Some(OsString::from(HELPER_ARG0)));
+        assert_eq!(req.args[0], OsString::from("/bin/echo"));
+        assert_eq!(req.args[1], OsString::from("hi"));
+        assert!(req.env.contains_key(std::ffi::OsStr::new(POLICY_ENV)));
+        assert!(req
+            .env
+            .contains_key(std::ffi::OsStr::new(crate::NETWORK_DISABLED_ENV)));
+        // policy JSON round-trips
+        let json = req
+            .env
+            .get(std::ffi::OsStr::new(POLICY_ENV))
+            .unwrap()
+            .to_string_lossy();
+        let parsed: HelperPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, helper);
     }
 }

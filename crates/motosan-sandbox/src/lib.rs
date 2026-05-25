@@ -1,7 +1,7 @@
 //! `motosan-sandbox` — run a command under a filesystem/network policy.
 //!
-//! Phase 0: core types + macOS Seatbelt. Linux enforcement arrives in Phase 1
-//! (until then [`Sandbox::run`] returns [`Error::Unsupported`] on Linux).
+//! Phase 0: core types + macOS Seatbelt. Phase 1 adds Linux Landlock + seccomp
+//! via the re-exec helper hook.
 
 mod denial;
 mod error;
@@ -28,12 +28,22 @@ pub use types::{
 /// policy, and run it.
 #[derive(Debug, Default)]
 pub struct Sandbox {
-    _private: (),
+    /// Path to the binary hosting `helper::run_if_invoked()`. `None` → resolve
+    /// `std::env::current_exe()` lazily in `transform()` (self-reexec). `Some` →
+    /// "external-helper mode" (tests point this at the `motosan-sandbox-helper`
+    /// bin).
+    helper_exe: Option<std::path::PathBuf>,
 }
 
 impl Sandbox {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Use an explicit helper binary instead of `current_exe()`.
+    pub fn with_helper_exe(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.helper_exe = Some(path.into());
+        self
     }
 
     /// Which backend this build will use, decided by the compile target.

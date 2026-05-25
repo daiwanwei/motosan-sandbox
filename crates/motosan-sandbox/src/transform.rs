@@ -33,7 +33,16 @@ impl Sandbox {
         // unambiguous expression — no statement-vs-tail-expression footgun.
         match kind {
             SandboxKind::None => Ok(passthrough(cmd, policy)), // unreachable; handled above
-            SandboxKind::LinuxSeccomp => Err(Error::Unsupported(SandboxKind::LinuxSeccomp)),
+            SandboxKind::LinuxSeccomp => {
+                use crate::reexec::{build_reexec_request, HelperPolicy};
+                let helper = HelperPolicy::from_policy(policy)?;
+                let helper_exe = match &self.helper_exe {
+                    Some(p) => p.clone(),
+                    None => std::env::current_exe()
+                        .map_err(|e| Error::Transform(format!("resolve current_exe: {e}")))?,
+                };
+                build_reexec_request(cmd, &helper, &helper_exe)
+            }
             #[cfg(target_os = "macos")]
             SandboxKind::MacosSeatbelt => crate::seatbelt::transform_seatbelt(cmd, policy),
             #[cfg(not(target_os = "macos"))]
