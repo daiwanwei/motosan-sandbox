@@ -3,9 +3,9 @@
 //! Phase 0: core types + macOS Seatbelt. Linux enforcement arrives in Phase 1
 //! (until then [`Sandbox::run`] returns [`Error::Unsupported`] on Linux).
 
+mod denial;
 mod error;
 mod policy;
-#[allow(dead_code)] // wired into Sandbox::run() in Task 10
 mod spawn;
 mod transform;
 mod types;
@@ -13,6 +13,7 @@ mod types;
 #[cfg(target_os = "macos")]
 mod seatbelt;
 
+pub use denial::is_likely_sandbox_denied;
 pub use error::Error;
 pub use policy::{NetworkPolicy, SandboxPolicy, WorkspaceWrite};
 pub use transform::NETWORK_DISABLED_ENV;
