@@ -29,8 +29,15 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      - name: cargo clippy (no features)
+      - name: cargo clippy (default features)
         run: cargo clippy --all-targets -- -D warnings
+
+      # Guards the awkward cfg cross-section: with `default = []` this is the
+      # same as the default build today, but it ensures a future `default`
+      # member can't hide a `--no-default-features` breakage. The (os ×
+      # default/proxy) matrix already covers linux-no-proxy and macos-proxy.
+      - name: cargo clippy (no default features)
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
 
       - name: cargo clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
