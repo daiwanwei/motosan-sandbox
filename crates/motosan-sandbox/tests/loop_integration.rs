@@ -327,6 +327,118 @@ async fn denied_then_reissued_escalated_succeeds() {
     );
 }
 
-// keep references alive for unused imports check until Task 5 adds users
-#[allow(dead_code)]
-fn _phantom_uses(_a: ToolCallItem, _b: ToolDecision) {}
+
+// Task 5: Defer → ExtensionResume plumbing.
+
+/// Human-gating demo: defers a `shell` call, then (simulating an approval that
+/// arrives out-of-band) runs the command unsandboxed in a background task and
+/// resolves the deferral via `ExtensionResume`. Proves the Defer plumbing works
+/// for a sandbox tool; a real deployment would await a human before resuming.
+#[derive(Default)]
+struct DeferGateExtension {
+    deferred: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl Extension for DeferGateExtension {
+    fn name(&self) -> &'static str {
+        "defer-gate"
+    }
+    fn deferred_call_timeout(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs(5))
+    }
+    async fn intercept_tool_call(
+        &mut self,
+        call: ToolCallItem,
+        ctx: &mut HookCtx<'_>,
+    ) -> Result<ToolDecision, ExtError> {
+        if call.name != "shell" {
+            return Ok(ToolDecision::Proceed(call));
+        }
+        self.deferred.store(true, Ordering::SeqCst);
+        let call_id = call.id.clone();
+        let args = call.args.clone();
+        let sender = ctx.ops_sender().clone();
+        // Stand in for "wait for human approval", then run escalated + resume.
+        tokio::spawn(async move {
+            // (a real UI would await the human here)
+            let result = match command_and_policy(&args, &std::env::temp_dir()) {
+                Some((cmd, _)) => {
+                    match Sandbox::new()
+                        .run(cmd, &SandboxPolicy::DangerFullAccess, RunOpts::default())
+                        .await
+                    {
+                        Ok(out) => to_tool_result(out, Sandbox::detect()),
+                        Err(e) => ToolResult::error(format!("escalated run failed: {e}")),
+                    }
+                }
+                None => ToolResult::error("bad command"),
+            };
+            let _ = sender
+                .send(motosan_agent_loop::AgentOp::ExtensionResume { call_id, result })
+                .await;
+        });
+        Ok(ToolDecision::Defer {
+            call_id: call.id,
+            reason: "awaiting approval".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn deferred_call_resolves_via_extension_resume() {
+    let (_guard, ws) = workspace();
+    let target = ws.join("via_defer.txt");
+    let deferred = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ext = DeferGateExtension {
+        deferred: Arc::clone(&deferred),
+    };
+    let tool = SandboxedExecTool {
+        sandbox: Sandbox::new(),
+        workspace: ws.clone(),
+    };
+
+    let llm = Arc::new(MockLlmClient::new(vec![
+        LlmResponse::single_tool_call(
+            "c1".into(),
+            "shell".into(),
+            json!({ "command": ["/bin/sh", "-c", format!("echo ok > {}", target.display())] }),
+        ),
+        LlmResponse::Message("done".into()),
+    ]));
+
+    let agent = Arc::new(
+        Engine::builder()
+            .tool(Arc::new(tool))
+            .extension(Box::new(ext))
+            .max_iterations(6)
+            .build(),
+    );
+
+    // External ops channel is REQUIRED to keep the internal receiver alive so
+    // that `ctx.ops_sender().send(ExtensionResume{..})` from a background task
+    // actually reaches `resolve_deferred_slots`. With no `.ops(rx)`, the loop
+    // takes the documented "no ops channel" fast-fail path and the deferred
+    // slot is filled with an error result before the spawned task ever runs.
+    let (_ops_tx, ops_rx) = tokio::sync::mpsc::channel::<motosan_agent_loop::AgentOp>(8);
+
+    let result = agent
+        .run(
+            llm as Arc<dyn LlmClient>,
+            vec![Message::user("run via gate")],
+        )
+        .ops(ops_rx)
+        .result()
+        .await
+        .unwrap();
+
+    assert!(
+        deferred.load(Ordering::SeqCst),
+        "intercept_tool_call deferred the call"
+    );
+    assert_eq!(
+        result.answer, "done",
+        "ExtensionResume resolved the deferred call"
+    );
+    assert!(target.exists(), "the gated command ran (via the resume task)");
+}
