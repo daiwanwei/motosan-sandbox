@@ -11,6 +11,12 @@ pub enum Error {
     #[error("sandboxing is not supported on this platform/backend: {0:?}")]
     Unsupported(SandboxKind),
 
+    /// The Linux sandbox helper could not enforce restrictions (e.g. Landlock
+    /// reported NotEnforced — kernel too old or disabled). The command was NOT
+    /// run unsandboxed.
+    #[error("sandbox could not be enforced: {0}")]
+    NotEnforced(String),
+
     /// The policy could not be turned into a runnable command.
     #[error("failed to build sandbox command: {0}")]
     Transform(String),
