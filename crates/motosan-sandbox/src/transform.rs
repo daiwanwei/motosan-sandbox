@@ -19,7 +19,7 @@ impl Sandbox {
         &self,
         cmd: &SandboxCommand,
         policy: &SandboxPolicy,
-        ctx: &TransformCtx<'_>,
+        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] ctx: &TransformCtx<'_>,
     ) -> Result<SpawnRequest, Error> {
         let kind = Self::detect();
 
@@ -74,7 +74,8 @@ impl Sandbox {
 /// Insert the cooperative HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY env vars
 /// pointing at the local proxy. Seatbelt makes this hard (the child can only
 /// reach this exact port); the env vars exist so cooperative tools know where
-/// to go.
+/// to go. macOS-only — Linux Proxied is `Unsupported` until Phase 3.
+#[cfg(target_os = "macos")]
 fn inject_proxy_env(env: &mut BTreeMap<OsString, OsString>, addr: std::net::SocketAddr) {
     let url = format!("http://127.0.0.1:{}", addr.port());
     for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {

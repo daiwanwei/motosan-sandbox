@@ -44,6 +44,13 @@ jobs:
       - name: cargo test (cancellation feature)
         run: cargo test --features cancellation --all-targets
 
+      # Phase 2 proxy: macOS runs the hard-enforcement integration
+      # (`proxy_enforcement.rs` — `direct_connection_blocked_by_seatbelt`);
+      # Linux exercises the `Error::Unsupported` path
+      # (`linux_enforcement.rs::proxied_is_unsupported_on_linux`).
+      - name: cargo test (proxy feature)
+        run: cargo test --features proxy --all-targets
+
       - name: cargo doc
         env:
           RUSTDOCFLAGS: -D warnings

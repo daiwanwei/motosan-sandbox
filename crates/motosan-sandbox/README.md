@@ -79,6 +79,59 @@ Limitations vs macOS: `read_only_subpaths` is **not supported** on Linux
 (Landlock is allow-only) — a policy that sets it returns `Error::Unsupported`.
 Files remain readable (only writes are confined), same as macOS Phase 0.
 
+## Network allowlist (Phase 2 — `proxy` feature)
+
+`NetworkPolicy::Proxied { allowlist }` routes egress through a local HTTP
+`CONNECT`-only proxy and gates each connection by host against the allowlist.
+Available behind the `proxy` Cargo feature:
+
+```bash
+cargo test --features proxy
+```
+
+```rust
+use motosan_sandbox::{HostPattern, NetworkPolicy, SandboxPolicy, WorkspaceWrite};
+
+let policy = SandboxPolicy::WorkspaceWrite(
+    WorkspaceWrite::new(vec![workspace.clone()]).network(NetworkPolicy::Proxied {
+        allowlist: vec![
+            HostPattern::parse("crates.io"),       // exact host
+            HostPattern::parse("*.rust-lang.org"), // subdomains only (excludes apex)
+            HostPattern::parse("**.example.com"),  // apex + subdomains
+            // HostPattern::parse("*"),            // any host
+        ],
+    }),
+);
+```
+
+Allowlist syntax (block-by-default — empty list denies everything):
+
+| Pattern | Matches | Excludes |
+|---|---|---|
+| `example.com` | exactly `example.com` | subdomains |
+| `*.example.com` | `a.example.com`, `b.a.example.com` | the apex `example.com` |
+| `**.example.com` | `example.com` + any subdomain | unrelated hosts |
+| `*` | any host | — |
+
+### Enforcement
+
+- **macOS — hard.** Seatbelt restricts the child's egress to the local proxy
+  port only. A tool that ignores `HTTP_PROXY` and opens a raw socket is blocked
+  by the kernel (load-bearing test: `direct_connection_blocked_by_seatbelt`).
+- **Linux — `Error::Unsupported`.** Hard Linux egress control requires a network
+  namespace (deferred to Phase 3). A cooperative bypassable mode is deliberately
+  NOT shipped.
+
+### Scope (Phase 2)
+
+- `CONNECT` only — HTTPS works; plain-HTTP forward returns `405 Method Not
+  Allowed`.
+- No MITM, no SOCKS. The proxy decides allow/deny from the `CONNECT host:port`
+  line; TLS bytes flow opaquely.
+- The proxy starts per `run()` (loopback, ephemeral port). Reuse across runs is
+  a future optimization.
+- `Proxied` without the `proxy` feature → clear `Error` at `run()`.
+
 ## Using with motosan-agent-loop (validated by the integration spike)
 
 `motosan-sandbox` plugs into `motosan-agent-loop` with no loop-core changes:
