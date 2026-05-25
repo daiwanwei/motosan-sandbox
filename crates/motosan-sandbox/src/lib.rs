@@ -5,6 +5,8 @@
 
 mod error;
 mod policy;
+#[allow(dead_code)] // wired into Sandbox::run() in Task 10
+mod spawn;
 mod transform;
 mod types;
 

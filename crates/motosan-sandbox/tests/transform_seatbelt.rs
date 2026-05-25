@@ -32,7 +32,8 @@ fn seatbelt_argv_wraps_sandbox_exec() {
 
     // a -D binding for the writable root must be present
     let has_root = req.args.windows(2).any(|w| {
-        w[0] == OsString::from("-D") && w[1] == OsString::from("WRITABLE_ROOT_0=/tmp/ws")
+        w[0] == *std::ffi::OsStr::new("-D")
+            && w[1] == *std::ffi::OsStr::new("WRITABLE_ROOT_0=/tmp/ws")
     });
     assert!(has_root, "expected -D WRITABLE_ROOT_0=/tmp/ws in {:?}", req.args);
 
