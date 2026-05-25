@@ -22,3 +22,7 @@ tokio-util = { version = "0.7", optional = true }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
+motosan-agent-loop = { version = "0.22", features = ["testing"] }
+motosan-agent-tool = "0.3"
+async-trait = "0.1"
+serde_json = "1"
