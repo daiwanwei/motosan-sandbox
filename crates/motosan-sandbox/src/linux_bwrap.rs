@@ -17,6 +17,7 @@ use std::path::PathBuf;
 /// First `bwrap` on `PATH`, or `None`. Spec §3: system-only — no vendoring,
 /// no C-build fallback; if this returns `None`, the Proxied path must
 /// degrade to `Error::Unsupported(LinuxSeccomp)`.
+#[allow(dead_code)] // wired by Task 7 (run() Linux Proxied integration)
 pub(crate) fn find_bwrap() -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
@@ -42,6 +43,7 @@ pub(crate) fn find_bwrap() -> Option<PathBuf> {
 /// applies mounts in argv order, so writable roots are sorted shallow-to-deep
 /// to keep deeper rules layered on top; read-only carveouts come last so they
 /// always override the writable bind they sit inside.
+#[allow(dead_code)] // wired by Task 6 (helper::run_if_invoked ProxiedOuter dispatch)
 pub(crate) fn build_bwrap_argv(
     writable_roots: &[PathBuf],
     read_only_subpaths: &[PathBuf],

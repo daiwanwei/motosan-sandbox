@@ -163,3 +163,116 @@ fn install_landlock(writable_roots: &[PathBuf]) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// `ProxyRouted` seccomp filter (Phase 3, spec §6). Distinct from the Phase-1
+/// `Blocked` filter: allow `socket`/`socketpair` only for `AF_INET` /
+/// `AF_INET6`; deny everything else (notably `AF_UNIX`, so the target can't
+/// bypass the bridge by talking to the host UDS directly). Destination
+/// filtering is the netns's job — this just controls socket families.
+///
+/// Applied in the inner stage AFTER the bridge has been forked (the child
+/// keeps full socket access, the parent / target inherits this filter), AFTER
+/// `no_new_privs`, BEFORE `execvp(target)`.
+#[allow(dead_code)] // wired by Task 6 (helper::run_if_invoked Proxied dispatch)
+fn install_proxy_routed_seccomp() -> Result<(), String> {
+    use seccompiler::{
+        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+        SeccompFilter, SeccompRule, TargetArch,
+    };
+
+    // socket(domain, ...) is rule[0]; deny when domain != AF_INET AND domain != AF_INET6.
+    let not_inet = || -> Result<SeccompRule, String> {
+        SeccompRule::new(vec![
+            SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::AF_INET as u64,
+            )
+            .map_err(|e| e.to_string())?,
+            SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::AF_INET6 as u64,
+            )
+            .map_err(|e| e.to_string())?,
+        ])
+        .map_err(|e| e.to_string())
+    };
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    rules.insert(libc::SYS_socket, vec![not_inet()?]);
+    rules.insert(libc::SYS_socketpair, vec![not_inet()?]);
+
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => TargetArch::x86_64,
+        "aarch64" => TargetArch::aarch64,
+        other => return Err(format!("unsupported arch: {other}")),
+    };
+    let filter = SeccompFilter::new(
+        rules,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EPERM as u32),
+        arch,
+    )
+    .map_err(|e| e.to_string())?;
+    let prog: BpfProgram = filter
+        .try_into()
+        .map_err(|e: seccompiler::BackendError| e.to_string())?;
+    apply_filter(&prog).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `install_proxy_routed_seccomp` must at least successfully BUILD the
+    /// BPF program (compilation = `try_into`). We can't actually apply it
+    /// in this test thread without breaking the rest of the test run, but
+    /// build-failure (wrong syscall id, bad rule shape) would surface here.
+    #[test]
+    fn proxy_routed_seccomp_filter_builds() {
+        // Replicate the body up to but not including `apply_filter`.
+        use seccompiler::{
+            BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+            SeccompFilter, SeccompRule, TargetArch,
+        };
+
+        let not_inet = || -> Result<SeccompRule, String> {
+            SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET as u64,
+                )
+                .map_err(|e| e.to_string())?,
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET6 as u64,
+                )
+                .map_err(|e| e.to_string())?,
+            ])
+            .map_err(|e| e.to_string())
+        };
+        let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+        rules.insert(libc::SYS_socket, vec![not_inet().unwrap()]);
+        rules.insert(libc::SYS_socketpair, vec![not_inet().unwrap()]);
+
+        let arch = match std::env::consts::ARCH {
+            "x86_64" => TargetArch::x86_64,
+            "aarch64" => TargetArch::aarch64,
+            other => panic!("unsupported test arch: {other}"),
+        };
+        let filter = SeccompFilter::new(
+            rules,
+            SeccompAction::Allow,
+            SeccompAction::Errno(libc::EPERM as u32),
+            arch,
+        )
+        .expect("filter compose");
+        let _prog: BpfProgram = filter.try_into().expect("compile to BPF");
+    }
+}

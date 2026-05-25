@@ -18,6 +18,8 @@ mod types;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod linux_bridge;
+#[cfg(target_os = "linux")]
 mod linux_bwrap;
 #[cfg(target_os = "macos")]
 mod seatbelt;

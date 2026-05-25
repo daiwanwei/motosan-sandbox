@@ -179,7 +179,7 @@ impl HelperPolicy {
     /// Build the **ProxiedOuter** variant — used by `run()` on Linux
     /// `NetworkPolicy::Proxied` after starting the proxy + host bridge.
     /// Accepts `read_only_subpaths` because bwrap can express them.
-    #[allow(dead_code)] // wired by Task 7 (run() Linux Proxied arm)
+    #[allow(dead_code)] // wired by Task 7 (run() Linux Proxied integration)
     pub(crate) fn for_proxied(
         writable_roots: Vec<PathBuf>,
         read_only_subpaths: Vec<PathBuf>,
@@ -196,6 +196,7 @@ impl HelperPolicy {
     /// stage just before `execv(bwrap, ...)`, so the inner stage (which
     /// re-reads `POLICY_ENV`) takes the inner branch.
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)] // wired by Task 6 (helper::run_if_invoked ProxiedOuter dispatch)
     pub(crate) fn into_proxied_inner(mut self) -> Self {
         if let HelperMode::ProxiedOuter { route_spec } = self.mode {
             self.mode = HelperMode::ProxiedInner { route_spec };
