@@ -5,10 +5,15 @@
 
 mod error;
 mod policy;
+mod transform;
 mod types;
+
+#[cfg(target_os = "macos")]
+mod seatbelt;
 
 pub use error::Error;
 pub use policy::{NetworkPolicy, SandboxPolicy, WorkspaceWrite};
+pub use transform::NETWORK_DISABLED_ENV;
 pub use types::{
     ExecOutput, ProxyHandle, RunOpts, SandboxCommand, SandboxKind, SpawnRequest, TransformCtx,
 };
