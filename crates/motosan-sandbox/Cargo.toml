@@ -1,0 +1,24 @@
+[package]
+name = "motosan-sandbox"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "OS-level sandboxing for command execution (macOS Seatbelt; Linux in later phases)"
+repository = "https://github.com/motosan-dev/motosan-sandbox"
+keywords = ["sandbox", "seatbelt", "security", "process", "isolation"]
+categories = ["os", "command-line-utilities"]
+
+[features]
+default = []
+# Optional capability — mirrors motosan-agent-loop's cancellation feature.
+cancellation = ["dep:tokio-util"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+tokio = { version = "1", features = ["process", "io-util", "time", "rt"] }
+tokio-util = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
