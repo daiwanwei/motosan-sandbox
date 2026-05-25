@@ -3,18 +3,42 @@
 
 use std::process::Stdio;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::error::Error;
 use crate::types::{ExecOutput, RunOpts, SpawnRequest};
 
-/// Truncate to `max` bytes (0 = unlimited).
-fn cap(mut v: Vec<u8>, max: usize) -> Vec<u8> {
-    if max != 0 && v.len() > max {
-        v.truncate(max);
+/// Read up to `max` bytes (0 = unlimited) from `reader`, then drain and discard
+/// the remainder to EOF so the child never blocks on a full pipe. Bounds the
+/// captured buffer to ~`max` bytes; runaway *duration* is still bounded by the
+/// caller's `RunOpts::timeout`.
+async fn read_capped<R: AsyncRead + Unpin>(mut reader: R, max: usize) -> Vec<u8> {
+    if max == 0 {
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf).await;
+        return buf;
     }
-    v
+
+    // Read at most `max` bytes. `Take` reports EOF once the limit is hit, so
+    // `read_to_end` stops there without over-allocating.
+    let mut buf = Vec::with_capacity(max.min(64 * 1024));
+    {
+        let mut limited = (&mut reader).take(max as u64);
+        let _ = limited.read_to_end(&mut buf).await;
+    }
+
+    // Drain whatever is left into a fixed scratch buffer so the writer side
+    // doesn't block; we never grow `buf` past `max`.
+    let mut scratch = [0u8; 8 * 1024];
+    loop {
+        match reader.read(&mut scratch).await {
+            Ok(0) | Err(_) => break, // EOF or error → done draining
+            Ok(_) => {}
+        }
+    }
+
+    buf
 }
 
 /// Why we stopped waiting early.
@@ -58,18 +82,11 @@ pub(crate) async fn spawn_and_capture(
 
     // Drain each pipe in its own task so a full pipe buffer can't deadlock the
     // wait. The tasks own the pipes (Send + 'static) and return the bytes read.
-    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
-    let out_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf).await;
-        buf
-    });
-    let err_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf).await;
-        buf
-    });
+    let stdout_pipe = child.stdout.take().expect("stdout piped");
+    let stderr_pipe = child.stderr.take().expect("stderr piped");
+    let max = opts.max_output_bytes;
+    let out_task = tokio::spawn(read_capped(stdout_pipe, max));
+    let err_task = tokio::spawn(read_capped(stderr_pipe, max));
 
     let mut timed_out = false;
 
@@ -118,8 +135,8 @@ pub(crate) async fn spawn_and_capture(
     Ok(ExecOutput {
         exit_code,
         signal,
-        stdout: cap(stdout, opts.max_output_bytes),
-        stderr: cap(stderr, opts.max_output_bytes),
+        stdout,
+        stderr,
         timed_out,
     })
 }
@@ -198,6 +215,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.stdout.len(), 4);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn large_output_is_capped_and_process_completes() {
+        // 1 MB of output, capped to 128 bytes. Must return exactly 128 bytes
+        // AND let the process finish (exit 0) — proving we drained the rest
+        // instead of buffering 1 MB or deadlocking on a full pipe.
+        let opts = RunOpts {
+            max_output_bytes: 128,
+            ..Default::default()
+        };
+        // NOTE: `spawn_and_capture` takes a 3rd `helper_reexec` arg (added in
+        // Phase 1) — pass `false` (this is a plain spawn, not a Linux re-exec).
+        let out = spawn_and_capture(
+            req("/bin/sh", &["-c", "head -c 1000000 /dev/zero"]),
+            &opts,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.stdout.len(), 128);
+        assert_eq!(out.exit_code, Some(0)); // proves we DRAINED (head could finish) — 1 MB >> pipe buf
+        assert!(!out.timed_out);
     }
 
     #[tokio::test]
