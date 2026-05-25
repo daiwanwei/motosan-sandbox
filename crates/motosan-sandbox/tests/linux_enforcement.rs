@@ -217,6 +217,20 @@ async fn read_only_subpaths_rejected() {
 }
 
 #[tokio::test]
+async fn proxied_is_unsupported_on_linux() {
+    let (_g, ws) = workspace();
+    let sb = sandbox();
+    let policy = SandboxPolicy::WorkspaceWrite(
+        WorkspaceWrite::new(vec![ws.clone()]).network(NetworkPolicy::Proxied { allowlist: vec![] }),
+    );
+    let err = sb
+        .run(sh("true", &ws), &policy, RunOpts::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Unsupported(_)));
+}
+
+#[tokio::test]
 async fn danger_full_access_runs_unsandboxed() {
     let (_g, ws) = workspace();
     let (_o, other) = workspace();
