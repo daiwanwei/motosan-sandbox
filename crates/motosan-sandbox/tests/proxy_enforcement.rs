@@ -67,12 +67,22 @@ async fn direct_connection_blocked_by_seatbelt() {
         )
         .await
         .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Defensive: a `sandbox-exec: …` prefix means the policy itself was
+    // parse-rejected — the child would exit nonzero for the wrong reason and
+    // we'd be "passing" without actually proving Seatbelt blocked a connect.
+    // Pinning the wire form lives in seatbelt.rs unit tests; this assert keeps
+    // THIS test honest at the integration boundary.
+    assert!(
+        !stderr.contains("sandbox-exec:"),
+        "sandbox-exec rejected the policy — test would be passing for the \
+         wrong reason; stderr: {stderr}"
+    );
     assert_ne!(
         out.exit_code,
         Some(0),
         "direct connect to a NON-proxy port must be blocked by Seatbelt; \
-         stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
+         stderr: {stderr}"
     );
 }
 
