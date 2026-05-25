@@ -13,6 +13,8 @@ mod types;
 
 #[cfg(target_os = "macos")]
 mod seatbelt;
+#[cfg(target_os = "linux")]
+mod linux;
 
 pub mod helper;
 
