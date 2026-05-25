@@ -54,6 +54,21 @@ impl Sandbox {
     }
 }
 
+impl Sandbox {
+    /// Detect the backend, transform under `policy`, spawn, and capture.
+    pub async fn run(
+        &self,
+        cmd: SandboxCommand,
+        policy: &SandboxPolicy,
+        opts: RunOpts,
+    ) -> Result<ExecOutput, Error> {
+        // Phase 0: no proxy lifecycle yet (NetworkPolicy has no Proxied variant).
+        let ctx = TransformCtx::default();
+        let req = self.transform(&cmd, policy, &ctx)?;
+        spawn::spawn_and_capture(req, &opts).await
+    }
+}
+
 #[cfg(test)]
 mod lib_tests {
     use super::*;
