@@ -19,7 +19,11 @@ impl Sandbox {
         &self,
         cmd: &SandboxCommand,
         policy: &SandboxPolicy,
-        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] ctx: &TransformCtx<'_>,
+        #[cfg_attr(
+            not(any(target_os = "macos", all(target_os = "linux", feature = "proxy"))),
+            allow(unused_variables)
+        )]
+        ctx: &TransformCtx<'_>,
     ) -> Result<SpawnRequest, Error> {
         let kind = Self::detect();
 
@@ -34,13 +38,49 @@ impl Sandbox {
         match kind {
             SandboxKind::None => Ok(passthrough(cmd, policy)), // unreachable; handled above
             SandboxKind::LinuxSeccomp => {
-                // Phase 2: Proxied is rejected on Linux (until Phase 3 ships
-                // netns-based hard egress control). Belt-and-braces: `run()`
-                // also rejects it before starting any proxy.
-                if matches!(policy.network(), NetworkPolicy::Proxied { .. }) {
-                    return Err(Error::Unsupported(SandboxKind::LinuxSeccomp));
-                }
                 use crate::reexec::{build_reexec_request, HelperPolicy};
+                if matches!(policy.network(), NetworkPolicy::Proxied { .. }) {
+                    // Phase 3: build the ProxiedOuter re-exec. Requires the
+                    // `proxy` feature (without it, `run()` rejects upstream).
+                    // The Landlock path's `read_only_subpaths` rejection is
+                    // bypassed here on purpose — bwrap CAN express ro-binds
+                    // inside a writable root (spec §5). The `route_spec`
+                    // field on `TransformCtx` only exists on the
+                    // `(linux, proxy)` cfg cross-section, so this whole
+                    // arm is similarly gated; other cfg combinations fall
+                    // through to `Unsupported`.
+                    #[cfg(all(target_os = "linux", feature = "proxy"))]
+                    {
+                        let route_spec = ctx.route_spec.cloned().ok_or_else(|| {
+                            Error::Transform(
+                                "Linux Proxied transform needs route_spec (run() bug)".into(),
+                            )
+                        })?;
+                        let (writable_roots, read_only_subpaths) = match policy {
+                            SandboxPolicy::WorkspaceWrite(w) => {
+                                (w.writable_roots.clone(), w.read_only_subpaths.clone())
+                            }
+                            _ => (Vec::new(), Vec::new()),
+                        };
+                        let helper = HelperPolicy::for_proxied(
+                            writable_roots,
+                            read_only_subpaths,
+                            route_spec,
+                        );
+                        let helper_exe = match &self.helper_exe {
+                            Some(p) => p.clone(),
+                            None => std::env::current_exe().map_err(|e| {
+                                Error::Transform(format!("resolve current_exe: {e}"))
+                            })?,
+                        };
+                        return build_reexec_request(cmd, &helper, &helper_exe);
+                    }
+                    #[cfg(not(all(target_os = "linux", feature = "proxy")))]
+                    {
+                        return Err(Error::Unsupported(SandboxKind::LinuxSeccomp));
+                    }
+                }
+                // Phase 1 Landlock path (Blocked/Allowed).
                 let helper = HelperPolicy::from_policy(policy)?;
                 let helper_exe = match &self.helper_exe {
                     Some(p) => p.clone(),

@@ -78,34 +78,65 @@ impl Sandbox {
     }
 }
 
-/// RAII slot holding the optional proxy server. Feature-gated so the rest of
-/// `run()` stays cfg-clean. `Drop` aborts the serving task on EVERY exit path
-/// (success, `?` early return, panic) — see spec §5.
+/// RAII slot holding the optional proxy server (Phase 2) + Linux host
+/// bridge (Phase 3). Feature-gated so the rest of `run()` stays cfg-clean.
+/// `Drop` aborts the serving tasks and removes the UDS temp dir on EVERY
+/// exit path (success, `?` early return, panic) — see spec §5/§7.
 struct ProxyGuard {
     #[cfg(feature = "proxy")]
     _server: Option<motosan_sandbox_proxy::ProxyServerHandle>,
+    /// Host bridge (Linux Proxied only). On macOS this stays `None`.
+    #[cfg(feature = "proxy")]
+    _bridge: Option<proxy_bridge::HostBridgeGuard>,
 }
 
 impl Sandbox {
-    /// Start the local proxy iff the policy is `Proxied`. Returns the lightweight
-    /// address-carrier (borrowed by `TransformCtx`) plus the RAII server slot.
+    /// Start the local proxy iff the policy is `Proxied`. Returns the
+    /// lightweight address-carrier (borrowed by `TransformCtx`), an optional
+    /// `ProxyRouteSpec` (set only on the Linux Proxied path; carries the
+    /// UDS routes the in-netns bridge will dial), and the RAII server slot.
     async fn maybe_start_proxy(
         &self,
         policy: &SandboxPolicy,
         kind: SandboxKind,
-    ) -> Result<(Option<ProxyHandle>, ProxyGuard), Error> {
+    ) -> Result<
+        (
+            Option<ProxyHandle>,
+            Option<crate::reexec::ProxyRouteSpec>,
+            ProxyGuard,
+        ),
+        Error,
+    > {
         let NetworkPolicy::Proxied { allowlist } = policy.network() else {
             return Ok((
+                None,
                 None,
                 ProxyGuard {
                     #[cfg(feature = "proxy")]
                     _server: None,
+                    #[cfg(feature = "proxy")]
+                    _bridge: None,
                 },
             ));
         };
-        // Linux Proxied is Unsupported until Phase 3 (no cooperative fallback).
-        if kind == SandboxKind::LinuxSeccomp {
-            return Err(Error::Unsupported(SandboxKind::LinuxSeccomp));
+        // Linux Proxied (Phase 3): require system `bwrap`. Absent → fall
+        // back to Unsupported so we never silently weaken the policy.
+        #[cfg(target_os = "linux")]
+        {
+            if kind == SandboxKind::LinuxSeccomp {
+                #[cfg(feature = "proxy")]
+                {
+                    if crate::linux_bwrap::find_bwrap().is_none() {
+                        return Err(Error::Unsupported(SandboxKind::LinuxSeccomp));
+                    }
+                    // fall through to the shared proxy-start path below
+                }
+                #[cfg(not(feature = "proxy"))]
+                {
+                    let _ = allowlist;
+                    return Err(Error::Unsupported(SandboxKind::LinuxSeccomp));
+                }
+            }
         }
         #[cfg(feature = "proxy")]
         {
@@ -117,16 +148,36 @@ impl Sandbox {
                 .await
                 .map_err(Error::Spawn)?;
             let addr = server.addr;
+
+            // Linux Proxied also needs the host bridge: per-env-var UDS, tokio
+            // accept loop forwarding UDS↔proxy. macOS routes directly through
+            // Seatbelt's localhost-port allow rule, no UDS bridge needed.
+            #[cfg(target_os = "linux")]
+            let (route_spec, bridge) = {
+                let (spec, guard) =
+                    proxy_bridge::prepare_host_bridge(addr, proxy_bridge::ROUTED_PROXY_ENV_KEYS)
+                        .await
+                        .map_err(Error::Spawn)?;
+                (Some(spec), Some(guard))
+            };
+            #[cfg(not(target_os = "linux"))]
+            let (route_spec, bridge) = (None, None);
+            // Suppress unused-on-non-linux warning when proxy is on but
+            // target is not linux.
+            let _ = kind;
+
             Ok((
                 Some(ProxyHandle { addr }),
+                route_spec,
                 ProxyGuard {
                     _server: Some(server),
+                    _bridge: bridge,
                 },
             ))
         }
         #[cfg(not(feature = "proxy"))]
         {
-            let _ = allowlist;
+            let _ = (allowlist, kind);
             Err(Error::Transform(
                 "Proxied policy requires the `proxy` feature".into(),
             ))
@@ -145,16 +196,22 @@ impl Sandbox {
 
         // Start the proxy iff the policy is Proxied. `addr_carrier` is borrowed
         // by `ctx`; `_guard` is the RAII slot whose Drop aborts the proxy task
-        // on EVERY exit path (success, `?`, panic). Both must live until after
-        // `spawn_and_capture` returns.
-        let (addr_carrier, _guard) = self.maybe_start_proxy(policy, kind).await?;
+        // + bridge tasks on EVERY exit path (success, `?`, panic). All three
+        // must live until after `spawn_and_capture` returns.
+        let (addr_carrier, route_spec, _guard) = self.maybe_start_proxy(policy, kind).await?;
+        // Cross-platform: `route_spec` is only consumed on Linux + proxy.
+        // Suppress the unused binding warning everywhere else.
+        #[cfg(not(all(target_os = "linux", feature = "proxy")))]
+        let _ = &route_spec;
         let ctx = TransformCtx {
             proxy: addr_carrier.as_ref(),
+            #[cfg(all(target_os = "linux", feature = "proxy"))]
+            route_spec: route_spec.as_ref(),
         };
 
         let req = self.transform(&cmd, policy, &ctx)?;
         spawn::spawn_and_capture(req, &opts, helper_reexec).await
-        // `_guard` drops here (and on any `?` above) → proxy task aborted.
+        // `_guard` drops here (and on any `?` above) → proxy + bridge torn down.
     }
 }
 

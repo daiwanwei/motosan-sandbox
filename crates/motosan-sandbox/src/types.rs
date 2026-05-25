@@ -65,11 +65,18 @@ pub struct ProxyHandle {
 }
 
 /// Side inputs to `transform()` that are not part of the policy. Keeps
-/// `transform()` pure: a proxy address (Phase 2) is INJECTED here, never
-/// discovered inside transform.
+/// `transform()` pure: a proxy address (Phase 2) and Linux-only proxy route
+/// spec (Phase 3) are INJECTED here, never discovered inside transform.
 #[derive(Debug, Default)]
 pub struct TransformCtx<'a> {
     pub proxy: Option<&'a ProxyHandle>,
+    /// Phase 3 (Linux Proxied only): per-env-var UDS routes the in-netns
+    /// bridge will connect out to. Built by `run()` via `prepare_host_bridge`
+    /// after starting the allowlist proxy. `pub(crate)` so external callers
+    /// can't fabricate one without going through `run()`. Cfg-gated to keep
+    /// the field consumed (read by the Linux/proxy transform arm).
+    #[cfg(all(target_os = "linux", feature = "proxy"))]
+    pub(crate) route_spec: Option<&'a crate::reexec::ProxyRouteSpec>,
 }
 
 /// The concrete, ready-to-spawn command that `transform()` produces. `spawn()`

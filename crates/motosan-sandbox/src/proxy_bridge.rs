@@ -65,7 +65,10 @@ pub(crate) async fn prepare_host_bridge(
             uds_path,
         });
     }
-    Ok((ProxyRouteSpec { routes }, HostBridgeGuard { _dir: dir, tasks }))
+    Ok((
+        ProxyRouteSpec { routes },
+        HostBridgeGuard { _dir: dir, tasks },
+    ))
 }
 
 /// RAII guard: aborts every accept loop and removes the UDS temp dir on Drop.

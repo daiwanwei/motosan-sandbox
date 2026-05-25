@@ -68,9 +68,7 @@ pub(crate) fn run_if_invoked() {
         HelperMode::ProxiedOuter { ref route_spec } => {
             run_proxied_outer(parts, &helper, route_spec.clone())
         }
-        HelperMode::ProxiedInner { ref route_spec } => {
-            run_proxied_inner(parts, route_spec.clone())
-        }
+        HelperMode::ProxiedInner { ref route_spec } => run_proxied_inner(parts, route_spec.clone()),
     }
 }
 
@@ -123,7 +121,11 @@ fn run_landlock(parts: Vec<OsString>, helper: &HelperPolicy, network_blocked: bo
 /// All IPC to the inner stage goes through env vars (`POLICY_ENV` +
 /// `STAGE_ENV`) because bwrap inherits the env reliably, but rewrites
 /// `argv[0]`. We do NOT rely on bwrap `--argv0` (version-dependent).
-fn run_proxied_outer(parts: Vec<OsString>, helper: &HelperPolicy, _route_spec: ProxyRouteSpec) -> ! {
+fn run_proxied_outer(
+    parts: Vec<OsString>,
+    helper: &HelperPolicy,
+    _route_spec: ProxyRouteSpec,
+) -> ! {
     if parts.is_empty() {
         die(HELPER_EXIT_BAD_POLICY, "no command to run");
     }
@@ -148,10 +150,7 @@ fn run_proxied_outer(parts: Vec<OsString>, helper: &HelperPolicy, _route_spec: P
     // rewrites arg0 anyway.
     let current_exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => die(
-            HELPER_EXIT_NOT_ENFORCED,
-            &format!("current_exe: {e}"),
-        ),
+        Err(e) => die(HELPER_EXIT_NOT_ENFORCED, &format!("current_exe: {e}")),
     };
     let mut inner_argv: Vec<String> = Vec::with_capacity(1 + parts.len());
     inner_argv.push(current_exe.to_string_lossy().into_owned());

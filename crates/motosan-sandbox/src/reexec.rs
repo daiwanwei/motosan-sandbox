@@ -275,11 +275,8 @@ mod ipc_tests {
                 uds_path: "/tmp/x.sock".into(),
             }],
         };
-        let h = HelperPolicy::for_proxied(
-            vec!["/ws".into()],
-            vec!["/ws/secret".into()],
-            spec.clone(),
-        );
+        let h =
+            HelperPolicy::for_proxied(vec!["/ws".into()], vec!["/ws/secret".into()], spec.clone());
         assert_eq!(h.writable_roots, vec![PathBuf::from("/ws")]);
         assert_eq!(h.read_only_subpaths, vec![PathBuf::from("/ws/secret")]);
         assert_eq!(h.mode, HelperMode::ProxiedOuter { route_spec: spec });
@@ -300,11 +297,8 @@ mod ipc_tests {
                 uds_path: "/tmp/r.sock".into(),
             }],
         };
-        let outer = HelperPolicy::for_proxied(
-            vec!["/ws".into()],
-            vec!["/ws/.git".into()],
-            spec.clone(),
-        );
+        let outer =
+            HelperPolicy::for_proxied(vec!["/ws".into()], vec!["/ws/.git".into()], spec.clone());
         let inner = HelperPolicy {
             writable_roots: vec!["/ws".into()],
             read_only_subpaths: vec!["/ws/.git".into()],
