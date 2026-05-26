@@ -215,9 +215,14 @@ mod tests {
             text.contains("(allow ipc-posix-sem)"),
             "base policy must grant POSIX semaphores for Python multiprocessing"
         );
+        // Shared memory is granted, but NARROWLY — only for the OpenMP lib name.
         assert!(
             text.contains("ipc-posix-shm-write-create"),
-            "base policy must grant POSIX shared memory for OpenMP/NumPy"
+            "base policy must grant shm create for OpenMP/MKL native libs"
+        );
+        assert!(
+            text.contains("__KMP_REGISTERED_LIB_"),
+            "shm grant must stay restricted to the OpenMP lib name (not general /psm_*)"
         );
     }
 
