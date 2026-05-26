@@ -7,6 +7,7 @@
 
 mod denial;
 mod error;
+mod execpolicy;
 mod policy;
 #[cfg(feature = "proxy")]
 mod proxy_bridge;
@@ -28,6 +29,7 @@ pub mod helper;
 
 pub use denial::is_likely_sandbox_denied;
 pub use error::Error;
+pub use execpolicy::{ExecDecision, ExecPolicy};
 pub use policy::{HostPattern, NetworkPolicy, ReadOnly, SandboxPolicy, WorkspaceWrite};
 pub use transform::NETWORK_DISABLED_ENV;
 pub use types::{
