@@ -17,6 +17,14 @@ pub const NETWORK_DISABLED_ENV: &str = "MOTOSAN_SANDBOX_NETWORK_DISABLED";
 /// starting with `/` is kept; otherwise `cwd` is prepended so relative globs
 /// anchor under the command's working directory (spec: relative globs resolve
 /// against SandboxCommand::cwd). Done ONCE here so Seatbelt and bwrap agree.
+///
+/// Both callers live behind `macos` / `(linux, proxy)` cfgs, so on the
+/// linux-no-proxy cross-section this is dead — allow it there (mirrors the
+/// `ctx` cfg_attr below; guarded by CI's `clippy --no-default-features` cell).
+#[cfg_attr(
+    not(any(target_os = "macos", all(target_os = "linux", feature = "proxy"))),
+    allow(dead_code)
+)]
 pub(crate) fn resolve_deny_globs(globs: &[String], cwd: &std::path::Path) -> Vec<String> {
     globs
         .iter()
