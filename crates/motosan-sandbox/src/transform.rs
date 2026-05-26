@@ -152,6 +152,7 @@ fn passthrough(cmd: &SandboxCommand, policy: &SandboxPolicy) -> SpawnRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::ReadOnly;
     use std::path::PathBuf;
 
     fn cmd() -> SandboxCommand {
@@ -170,9 +171,7 @@ mod tests {
     fn build_env_sets_marker_when_network_blocked() {
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Blocked,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
         );
         assert_eq!(
             env.get(std::ffi::OsStr::new(NETWORK_DISABLED_ENV))
@@ -185,9 +184,7 @@ mod tests {
     fn build_env_omits_marker_when_network_allowed() {
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Allowed,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Allowed)),
         );
         assert!(!env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
     }
@@ -198,9 +195,9 @@ mod tests {
         // cooperative tools would self-restrict and refuse to use the proxy.
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Proxied { allowlist: vec![] },
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
+                allowlist: vec![],
+            })),
         );
         assert!(!env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
     }

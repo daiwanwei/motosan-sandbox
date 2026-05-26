@@ -35,7 +35,7 @@ pub(crate) fn build_policy(
     match policy {
         // DangerFullAccess never reaches here (transform() passes it through).
         SandboxPolicy::DangerFullAccess => {}
-        SandboxPolicy::ReadOnly { .. } => {
+        SandboxPolicy::ReadOnly(_) => {
             // Read-everywhere is already in the base; writes stay denied.
         }
         SandboxPolicy::WorkspaceWrite(w) => {
@@ -122,14 +122,12 @@ pub(crate) fn transform_seatbelt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{HostPattern, WorkspaceWrite};
+    use crate::policy::{HostPattern, ReadOnly, WorkspaceWrite};
 
     #[test]
     fn base_policy_denies_by_default() {
         let (text, params) = build_policy(
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Blocked,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
             None,
         )
         .unwrap();
@@ -143,9 +141,7 @@ mod tests {
     #[test]
     fn read_only_with_network_adds_network_rule() {
         let (text, _) = build_policy(
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Allowed,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Allowed)),
             None,
         )
         .unwrap();
@@ -205,9 +201,7 @@ mod tests {
     #[test]
     fn base_policy_grants_posix_ipc() {
         let (text, _) = build_policy(
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Blocked,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
             None,
         )
         .unwrap();
@@ -228,9 +222,9 @@ mod tests {
 
     #[test]
     fn proxied_without_addr_fails_closed() {
-        let policy = SandboxPolicy::ReadOnly {
-            network: NetworkPolicy::Proxied { allowlist: vec![] },
-        };
+        let policy = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
+            allowlist: vec![],
+        }));
         let err = build_policy(&policy, None).unwrap_err();
         assert!(
             matches!(err, Error::Transform(ref m) if m.contains("proxied")),

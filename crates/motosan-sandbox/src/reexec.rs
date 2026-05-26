@@ -157,7 +157,7 @@ impl HelperPolicy {
         let writable_roots = match policy {
             // DangerFullAccess never reaches the helper (transform passes through).
             SandboxPolicy::DangerFullAccess => Vec::new(),
-            SandboxPolicy::ReadOnly { .. } => Vec::new(),
+            SandboxPolicy::ReadOnly(_) => Vec::new(),
             SandboxPolicy::WorkspaceWrite(w) => {
                 if !w.read_only_subpaths.is_empty() {
                     // Landlock is allow-only: you cannot carve a read-only
@@ -208,7 +208,7 @@ impl HelperPolicy {
 #[cfg(test)]
 mod ipc_tests {
     use super::*;
-    use crate::policy::{NetworkPolicy, WorkspaceWrite};
+    use crate::policy::{NetworkPolicy, ReadOnly, WorkspaceWrite};
 
     #[test]
     fn workspace_write_maps_roots_and_network() {
@@ -228,9 +228,7 @@ mod ipc_tests {
 
     #[test]
     fn read_only_maps_to_no_roots() {
-        let h = HelperPolicy::from_policy(&SandboxPolicy::ReadOnly {
-            network: NetworkPolicy::Allowed,
-        })
+        let h = HelperPolicy::from_policy(&SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Allowed)))
         .unwrap();
         assert!(h.writable_roots.is_empty());
         assert_eq!(
@@ -258,9 +256,9 @@ mod ipc_tests {
     fn proxied_rejected_in_from_policy() {
         // `from_policy` is for the Landlock path only; Proxied must go
         // through `for_proxied` so a `route_spec` is supplied.
-        let p = SandboxPolicy::ReadOnly {
-            network: NetworkPolicy::Proxied { allowlist: vec![] },
-        };
+        let p = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
+            allowlist: vec![],
+        }));
         assert!(matches!(
             HelperPolicy::from_policy(&p),
             Err(Error::Unsupported(_))

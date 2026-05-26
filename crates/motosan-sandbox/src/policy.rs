@@ -71,6 +71,7 @@ pub struct WorkspaceWrite {
     pub read_only_subpaths: Vec<PathBuf>,
     pub exclude_tmp: bool,
     pub network: NetworkPolicy,
+    pub deny_read_globs: Vec<String>,
 }
 
 impl WorkspaceWrite {
@@ -82,6 +83,7 @@ impl WorkspaceWrite {
             read_only_subpaths: Vec::new(),
             exclude_tmp: false,
             network: NetworkPolicy::Blocked,
+            deny_read_globs: Vec::new(),
         }
     }
 
@@ -101,6 +103,41 @@ impl WorkspaceWrite {
         self.network = n;
         self
     }
+
+    /// Add a deny-read glob pattern (e.g. `"**/.env"`). Orthogonal to
+    /// `read_only_subpaths` (which denies WRITES, not reads).
+    pub fn deny_read(mut self, glob: impl Into<String>) -> Self {
+        self.deny_read_globs.push(glob.into());
+        self
+    }
+}
+
+/// Read-only filesystem policy: whole FS readable except `deny_read_globs`;
+/// network per `NetworkPolicy`. Builder struct (mirrors [`WorkspaceWrite`]) so
+/// new fields stay non-breaking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ReadOnly {
+    pub network: NetworkPolicy,
+    /// Glob patterns whose matches are made UNREADABLE. Enforced on macOS
+    /// Seatbelt + Linux bwrap (`Proxied`); `Error::Unsupported` on the Linux
+    /// Landlock path (allow-only). Relative globs resolve against the command cwd.
+    pub deny_read_globs: Vec<String>,
+}
+
+impl ReadOnly {
+    pub fn new(network: NetworkPolicy) -> Self {
+        Self {
+            network,
+            deny_read_globs: Vec::new(),
+        }
+    }
+
+    /// Add a deny-read glob pattern (e.g. `"**/.env"`, `"**/*.pem"`).
+    pub fn deny_read(mut self, glob: impl Into<String>) -> Self {
+        self.deny_read_globs.push(glob.into());
+        self
+    }
 }
 
 /// Top-level sandbox policy.
@@ -109,8 +146,8 @@ impl WorkspaceWrite {
 pub enum SandboxPolicy {
     /// No sandbox — run unrestricted. Used for escalated retries.
     DangerFullAccess,
-    /// Read-only filesystem; network per `NetworkPolicy`.
-    ReadOnly { network: NetworkPolicy },
+    /// Read-only filesystem; see [`ReadOnly`].
+    ReadOnly(ReadOnly),
     /// Writable roots + read-everywhere; network per `NetworkPolicy`.
     WorkspaceWrite(WorkspaceWrite),
 }
@@ -121,8 +158,17 @@ impl SandboxPolicy {
     pub fn network(&self) -> NetworkPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => NetworkPolicy::Allowed,
-            SandboxPolicy::ReadOnly { network } => network.clone(),
+            SandboxPolicy::ReadOnly(r) => r.network.clone(),
             SandboxPolicy::WorkspaceWrite(w) => w.network.clone(),
+        }
+    }
+
+    /// Effective deny-read glob list. `&[]` for `DangerFullAccess`.
+    pub fn deny_read_globs(&self) -> &[String] {
+        match self {
+            SandboxPolicy::DangerFullAccess => &[],
+            SandboxPolicy::ReadOnly(r) => &r.deny_read_globs,
+            SandboxPolicy::WorkspaceWrite(w) => &w.deny_read_globs,
         }
     }
 
@@ -135,6 +181,41 @@ impl SandboxPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readonly_builder_defaults_and_chains() {
+        let ro = ReadOnly::new(NetworkPolicy::Blocked);
+        assert_eq!(ro.network, NetworkPolicy::Blocked);
+        assert!(ro.deny_read_globs.is_empty());
+
+        let ro = ReadOnly::new(NetworkPolicy::Allowed)
+            .deny_read("**/.env")
+            .deny_read("**/*.pem");
+        assert_eq!(ro.deny_read_globs, vec!["**/.env", "**/*.pem"]);
+    }
+
+    #[test]
+    fn workspace_write_deny_read_chains() {
+        let w = WorkspaceWrite::new(vec!["/ws".into()]).deny_read("**/.env");
+        assert_eq!(w.deny_read_globs, vec!["**/.env".to_string()]);
+    }
+
+    #[test]
+    fn deny_read_globs_accessor_covers_each_variant() {
+        assert!(SandboxPolicy::DangerFullAccess.deny_read_globs().is_empty());
+        assert_eq!(
+            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked).deny_read("a"))
+                .deny_read_globs(),
+            &["a".to_string()]
+        );
+        assert_eq!(
+            SandboxPolicy::WorkspaceWrite(
+                WorkspaceWrite::new(vec!["/ws".into()]).deny_read("b")
+            )
+            .deny_read_globs(),
+            &["b".to_string()]
+        );
+    }
 
     #[test]
     fn builder_defaults() {
@@ -163,9 +244,7 @@ mod tests {
             NetworkPolicy::Allowed
         );
         assert_eq!(
-            SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Blocked
-            }
+            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked))
             .network(),
             NetworkPolicy::Blocked
         );
@@ -178,9 +257,7 @@ mod tests {
     #[test]
     fn is_full_access_only_for_danger() {
         assert!(SandboxPolicy::DangerFullAccess.is_full_access());
-        assert!(!SandboxPolicy::ReadOnly {
-            network: NetworkPolicy::Blocked
-        }
+        assert!(!SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked))
         .is_full_access());
     }
 }
