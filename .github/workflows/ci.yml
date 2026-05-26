@@ -73,6 +73,13 @@ jobs:
       - name: cargo test (proxy feature)
         run: cargo test --features proxy --all-targets
 
+      # Smoke-test the example end-to-end. It exits non-zero only if a
+      # deterministic control leaks (real regression guard), and self-skips
+      # (exit 0) when python3/bwrap are absent. Both runners have python3;
+      # ubuntu provisions bwrap above, so the strategy runs for real there.
+      - name: cargo run example (financial_sandbox smoke)
+        run: cargo run --example financial_sandbox --features proxy
+
       - name: cargo doc
         env:
           RUSTDOCFLAGS: -D warnings
