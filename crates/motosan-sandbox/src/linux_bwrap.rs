@@ -23,7 +23,6 @@ const MAX_DENY_READ_GLOB_MATCHES: usize = 8192;
 /// `--ro-bind /dev/null <p>`, directories get `--tmpfs <p>`. Walks from each
 /// glob's static prefix. Errors if matches exceed the cap (refuse, don't
 /// partially mask).
-#[allow(dead_code)] // wired by Task 7 (run() Linux Proxied integration)
 pub(crate) fn expand_deny_read_masks(globs: &[String]) -> std::io::Result<Vec<String>> {
     use globset::Glob;
     use walkdir::WalkDir;
