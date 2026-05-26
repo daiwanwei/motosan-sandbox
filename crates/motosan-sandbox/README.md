@@ -50,6 +50,35 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 }
 ```
 
+## Command allowlist (`ExecPolicy`)
+
+`ExecPolicy` is a small, standalone gate evaluated **before** `Sandbox::run` —
+useful when the command itself comes from an untrusted source (an LLM/agent
+proposing a shell command). Default-deny, no deps, pure logic.
+
+```rust
+use motosan_sandbox::{ExecPolicy, ExecDecision};
+
+let gate = ExecPolicy::new().allow("python3").allow("pip");
+match gate.check(&cmd) {
+    ExecDecision::Deny { reason, .. } => return Err(reason.into()), // never reaches the sandbox
+    ExecDecision::Allow => sandbox.run(cmd, &policy, opts).await?,
+};
+```
+
+**Matching:** an entry **with `/`** is an **exact full-path** rule
+(`allow("/usr/bin/python3")` permits only that path — use this when the command
+is untrusted and you care *which* binary runs); an entry **without `/`** is a
+**basename** rule (`allow("python3")` permits any program whose `file_name` is
+`python3`, including `./python3` at an attacker-chosen path).
+
+**Caveats** (this gate is coarse on purpose; the OS sandbox is the real wall):
+- It vets the entry command only — not what the sandboxed process then `exec`s,
+  and not what `python3 -c "…"` does inside an allowed interpreter.
+- A venv interpreter's basename is `python`, not `python3` — `.venv/bin/python`
+  needs `allow("python")` (or an exact path), not `allow("python3")`.
+- No `$PATH` lookup, no symlink resolution.
+
 ## Example: financial sandbox
 
 A runnable end-to-end demo of running untrusted strategy code safely:
