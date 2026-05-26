@@ -28,7 +28,7 @@ This example demonstrates the library; it adds no library code. "TDD" here = the
 **Files:**
 - Create: `crates/motosan-sandbox/examples/strategy.py`
 
-- [ ] **Step 1: Write the strategy**
+- [x] **Step 1: Write the strategy**
 
 Create `crates/motosan-sandbox/examples/strategy.py`:
 
@@ -104,12 +104,12 @@ print(f"--- {len(results) - len(leaked)}/{len(results)} controls held ---",
 sys.exit(1 if leaked else 0)
 ```
 
-- [ ] **Step 2: Sanity-check the strategy parses**
+- [x] **Step 2: Sanity-check the strategy parses**
 
 Run: `python3 -m py_compile crates/motosan-sandbox/examples/strategy.py && echo OK`
 Expected: `OK` (no syntax error).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/motosan-sandbox/examples/strategy.py
@@ -123,7 +123,7 @@ git commit -m "example(strategy): stdlib untrusted strategy asserting the contro
 **Files:**
 - Create: `crates/motosan-sandbox/examples/financial_sandbox.rs`
 
-- [ ] **Step 1: Write the harness**
+- [x] **Step 1: Write the harness**
 
 Create `crates/motosan-sandbox/examples/financial_sandbox.rs`:
 
@@ -289,7 +289,7 @@ async fn main() {
 }
 ```
 
-- [ ] **Step 2: Verify it compiles (with and without the proxy feature)**
+- [x] **Step 2: Verify it compiles (with and without the proxy feature)**
 
 Run:
 ```bash
@@ -298,12 +298,12 @@ cargo build -p motosan-sandbox --example financial_sandbox
 ```
 Expected: both compile (the example references only always-present API; `proxy` is needed at *runtime*, not to compile).
 
-- [ ] **Step 3: Run it for real (macOS dev box)**
+- [x] **Step 3: Run it for real (macOS dev box)**
 
 Run: `cargo run -p motosan-sandbox --example financial_sandbox --features proxy`
 Expected: prints Phase A (venv exit=Some(0)), Phase B matrix with **`PASS`** on all of `workspace-write`, `write-confinement`, `read-input`, `secret-deny-read`, `net-allowlist-deny`, `direct-egress-wall`; an `INFO net-allow …` line; `--- 6/6 controls held ---`; process exit 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/motosan-sandbox/examples/financial_sandbox.rs
@@ -318,7 +318,7 @@ git commit -m "example(financial_sandbox): two-phase provision+run harness"
 - Modify: `crates/motosan-sandbox/README.md`
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Add the README section**
+- [x] **Step 1: Add the README section**
 
 In `crates/motosan-sandbox/README.md`, add a top-level section:
 
@@ -352,7 +352,7 @@ motosan-sandbox = { git = "https://github.com/motosan-dev/motosan-sandbox", feat
 > fully on macOS and on bwrap-equipped Linux.
 ```
 
-- [ ] **Step 2: Add the CI smoke step**
+- [x] **Step 2: Add the CI smoke step**
 
 In `.github/workflows/ci.yml`, after the `cargo test (proxy feature)` step, add:
 
@@ -365,7 +365,7 @@ In `.github/workflows/ci.yml`, after the `cargo test (proxy feature)` step, add:
         run: cargo run --example financial_sandbox --features proxy
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/motosan-sandbox/README.md .github/workflows/ci.yml
@@ -376,7 +376,7 @@ git commit -m "docs(readme)+ci: document and smoke-test the financial_sandbox ex
 
 ### Task 4: Full verification
 
-- [ ] **Step 1: Lint + fmt**
+- [x] **Step 1: Lint + fmt**
 
 Run:
 ```bash
@@ -385,17 +385,17 @@ cargo fmt --all -- --check
 ```
 Expected: clean (examples are included in `--all-targets`).
 
-- [ ] **Step 2: Cross-target Linux compile (example builds on the CI target)**
+- [x] **Step 2: Cross-target Linux compile (example builds on the CI target)**
 
 Run: `cargo clippy --target x86_64-unknown-linux-gnu --all-features --all-targets -- -D warnings`
 Expected: clean (the example compiles for Linux; it actually runs on CI-ubuntu).
 
-- [ ] **Step 3: Re-run the example to confirm exit 0**
+- [x] **Step 3: Re-run the example to confirm exit 0**
 
 Run: `cargo run -p motosan-sandbox --example financial_sandbox --features proxy; echo "exit=$?"`
 Expected: matrix all `PASS`, `exit=0`.
 
-- [ ] **Step 4: Existing suites still pass**
+- [x] **Step 4: Existing suites still pass**
 
 Run: `cargo test --all-features 2>&1 | tail -5`
 Expected: PASS (no regressions; the example is not run by `cargo test`).
