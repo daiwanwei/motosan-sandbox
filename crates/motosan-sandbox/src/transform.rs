@@ -13,6 +13,23 @@ use crate::Sandbox;
 /// self-restrict. Mirrors Codex's `CODEX_SANDBOX_NETWORK_DISABLED`.
 pub const NETWORK_DISABLED_ENV: &str = "MOTOSAN_SANDBOX_NETWORK_DISABLED";
 
+/// Resolve deny-read globs to absolute form against `cwd`. Glob already
+/// starting with `/` is kept; otherwise `cwd` is prepended so relative globs
+/// anchor under the command's working directory (spec: relative globs resolve
+/// against SandboxCommand::cwd). Done ONCE here so Seatbelt and bwrap agree.
+pub(crate) fn resolve_deny_globs(globs: &[String], cwd: &std::path::Path) -> Vec<String> {
+    globs
+        .iter()
+        .map(|g| {
+            if g.starts_with('/') {
+                g.clone()
+            } else {
+                format!("{}/{}", cwd.to_string_lossy().trim_end_matches('/'), g)
+            }
+        })
+        .collect()
+}
+
 impl Sandbox {
     /// Build the concrete command to spawn. Pure given its inputs.
     pub fn transform(
@@ -92,7 +109,8 @@ impl Sandbox {
             #[cfg(target_os = "macos")]
             SandboxKind::MacosSeatbelt => {
                 let proxy_addr = ctx.proxy.map(|h| h.addr);
-                let mut req = crate::seatbelt::transform_seatbelt(cmd, policy, proxy_addr)?;
+                let deny = resolve_deny_globs(policy.deny_read_globs(), &cmd.cwd);
+                let mut req = crate::seatbelt::transform_seatbelt(cmd, policy, proxy_addr, &deny)?;
                 // Layer proxy env on top, sourced from the ctx (the pure
                 // build_env() helper has no ctx and stays untouched).
                 if let NetworkPolicy::Proxied { .. } = policy.network() {

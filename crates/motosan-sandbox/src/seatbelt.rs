@@ -28,6 +28,7 @@ pub(crate) struct Param {
 pub(crate) fn build_policy(
     policy: &SandboxPolicy,
     proxy: Option<SocketAddr>,
+    deny_read_globs: &[String],
 ) -> Result<(String, Vec<Param>), Error> {
     let mut sections: Vec<String> = vec![BASE_POLICY.to_string()];
     let mut params: Vec<Param> = Vec::new();
@@ -81,7 +82,81 @@ pub(crate) fn build_policy(
         }
     }
 
+    // Deny-read globs → regex deny rules. Appended AFTER `(allow file-read*)`
+    // so they override it (SBPL last-match-wins). No -D param: regex is inline.
+    // Globs are already absolute (resolved against cwd in transform()).
+    for glob in deny_read_globs {
+        for re in deny_read_regexes(glob) {
+            let re = re.replace('"', "\\\"");
+            sections.push(format!("(deny file-read* (regex #\"{re}\"))"));
+        }
+    }
+
     Ok((sections.join("\n"), params))
+}
+
+/// Translate one ALREADY-ABSOLUTE deny-read glob into anchored Seatbelt
+/// regex(es). Mirrors Codex's `seatbelt_regex_for_unreadable_glob`: a regex for
+/// the glob itself plus, when the glob has a wildcard tail, a regex for the
+/// static-prefix directory so the directory node is also denied. `**` → `.*`,
+/// `*` → `[^/]*`, `?` → `[^/]`; all other regex metachars are escaped.
+/// (transform.rs resolves relative globs to absolute before calling this.)
+pub(crate) fn deny_read_regexes(glob: &str) -> Vec<String> {
+    let mut out = vec![format!("^{}$", glob_body_to_regex(glob))];
+
+    // Static prefix directory (everything before the first wildcard segment),
+    // so `/a/b/**` also denies reading `/a/b` itself.
+    if let Some(idx) = glob.find(['*', '?']) {
+        let prefix = &glob[..idx];
+        if let Some(dir) = prefix.rsplit_once('/').map(|(d, _)| d) {
+            if !dir.is_empty() {
+                out.push(format!("^{}$", regex_escape(dir)));
+            }
+        }
+    }
+    out
+}
+
+/// Translate glob metachars to regex; escape everything else. NOTE: a `**/`
+/// tail becomes `.*`, so `**/.env` also matches `foo.env` (slight over-deny) —
+/// acceptable for a secret-hiding deny rule.
+fn glob_body_to_regex(glob: &str) -> String {
+    let mut re = String::with_capacity(glob.len() * 2);
+    let bytes = glob.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'*' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    re.push_str(".*");
+                    i += 2;
+                    // swallow a following '/' so `**/` matches zero dirs too
+                    if i < bytes.len() && bytes[i] == b'/' {
+                        i += 1;
+                    }
+                    continue;
+                } else {
+                    re.push_str("[^/]*");
+                }
+            }
+            b'?' => re.push_str("[^/]"),
+            c => re.push_str(&regex_escape(&(c as char).to_string())),
+        }
+        i += 1;
+    }
+    re
+}
+
+/// Escape regex metacharacters in a literal string.
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if r".+*?()|[]{}^$\".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn path_str(p: &Path) -> String {
@@ -95,8 +170,9 @@ pub(crate) fn transform_seatbelt(
     cmd: &SandboxCommand,
     policy: &SandboxPolicy,
     proxy: Option<SocketAddr>,
+    deny_read_globs: &[String],
 ) -> Result<SpawnRequest, Error> {
-    let (policy_text, params) = build_policy(policy, proxy)?;
+    let (policy_text, params) = build_policy(policy, proxy, deny_read_globs)?;
 
     let mut args: Vec<OsString> = Vec::new();
     args.push("-p".into());
@@ -124,11 +200,27 @@ mod tests {
     use super::*;
     use crate::policy::{HostPattern, ReadOnly, WorkspaceWrite};
 
+    // deny_read_regexes receives an ALREADY-ABSOLUTE glob — transform.rs resolves
+    // relative→absolute against cmd.cwd ONCE (see Step 5), so both backends agree.
+    #[test]
+    fn glob_to_deny_regexes_translates_and_anchors() {
+        let rs = deny_read_regexes("/Users/x/.aws/**");
+        assert!(rs.iter().any(|r| r == r"^/Users/x/\.aws/.*$"));
+        assert!(rs.iter().any(|r| r == r"^/Users/x/\.aws$"));
+    }
+
+    #[test]
+    fn glob_to_deny_regexes_single_star_is_segment_scoped() {
+        let rs = deny_read_regexes("/ws/*.pem");
+        assert!(rs.iter().any(|r| r == r"^/ws/[^/]*\.pem$"));
+    }
+
     #[test]
     fn base_policy_denies_by_default() {
         let (text, params) = build_policy(
             &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
             None,
+            &[],
         )
         .unwrap();
         assert!(text.contains("(deny default)"));
@@ -143,6 +235,7 @@ mod tests {
         let (text, _) = build_policy(
             &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Allowed)),
             None,
+            &[],
         )
         .unwrap();
         assert!(text.contains("(allow network*)"));
@@ -151,7 +244,7 @@ mod tests {
     #[test]
     fn workspace_write_emits_writable_and_readonly_params() {
         let w = WorkspaceWrite::new(vec!["/ws".into(), "/cache".into()]).read_only("/ws/secrets");
-        let (text, params) = build_policy(&SandboxPolicy::WorkspaceWrite(w), None).unwrap();
+        let (text, params) = build_policy(&SandboxPolicy::WorkspaceWrite(w), None, &[]).unwrap();
 
         assert!(text.contains("(allow file-write* (subpath (param \"WRITABLE_ROOT_0\")))"));
         assert!(text.contains("(allow file-write* (subpath (param \"WRITABLE_ROOT_1\")))"));
@@ -189,7 +282,7 @@ mod tests {
             }),
         );
         let addr: SocketAddr = "127.0.0.1:54321".parse().unwrap();
-        let (text, _) = build_policy(&policy, Some(addr)).unwrap();
+        let (text, _) = build_policy(&policy, Some(addr), &[]).unwrap();
         assert!(
             text.contains("(allow network-outbound (remote ip \"localhost:54321\"))"),
             "got: {text}"
@@ -203,6 +296,7 @@ mod tests {
         let (text, _) = build_policy(
             &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
             None,
+            &[],
         )
         .unwrap();
         assert!(
@@ -225,7 +319,7 @@ mod tests {
         let policy = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
             allowlist: vec![],
         }));
-        let err = build_policy(&policy, None).unwrap_err();
+        let err = build_policy(&policy, None, &[]).unwrap_err();
         assert!(
             matches!(err, Error::Transform(ref m) if m.contains("proxied")),
             "expected Transform error, got {err:?}"
