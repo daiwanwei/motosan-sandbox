@@ -42,6 +42,17 @@ async fn run(
     env: BTreeMap<OsString, OsString>,
     policy: &SandboxPolicy,
 ) -> Result<ExecOutput, Error> {
+    // `..Default::default()` is load-bearing WITH the `cancellation` feature
+    // (fills the cfg-gated `cancel` field) but reads as `needless_update`
+    // WITHOUT it (all remaining fields specified). Allow the lint rather than
+    // drop the update (which would be a missing-field error under cancellation)
+    // or reassign-after-default (which trips `field_reassign_with_default`).
+    #[allow(clippy::needless_update)]
+    let opts = RunOpts {
+        timeout: Some(Duration::from_secs(30)),
+        max_output_bytes: 1 << 20,
+        ..Default::default()
+    };
     sb.run(
         SandboxCommand {
             program: program.clone(),
@@ -50,11 +61,7 @@ async fn run(
             env,
         },
         policy,
-        RunOpts {
-            timeout: Some(Duration::from_secs(30)),
-            max_output_bytes: 1 << 20,
-            ..Default::default()
-        },
+        opts,
     )
     .await
 }
