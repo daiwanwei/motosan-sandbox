@@ -34,7 +34,7 @@
 - Modify: `crates/motosan-sandbox/src/policy.rs`
 - Modify: `crates/motosan-sandbox/src/lib.rs`
 
-- [ ] **Step 1: Write failing builder tests**
+- [x] **Step 1: Write failing builder tests**
 
 In `crates/motosan-sandbox/src/policy.rs`, add to `mod tests`:
 
@@ -75,12 +75,12 @@ fn deny_read_globs_accessor_covers_each_variant() {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails to COMPILE**
+- [x] **Step 2: Run to verify it fails to COMPILE**
 
 Run: `cargo test -p motosan-sandbox --lib policy:: 2>&1 | head -20`
 Expected: compile error — `ReadOnly::new` / `deny_read` / `deny_read_globs` not found.
 
-- [ ] **Step 3: Restructure `ReadOnly` into a builder struct**
+- [x] **Step 3: Restructure `ReadOnly` into a builder struct**
 
 In `crates/motosan-sandbox/src/policy.rs`, add the new struct (place it just above `pub enum SandboxPolicy`):
 
@@ -114,7 +114,7 @@ impl ReadOnly {
 }
 ```
 
-- [ ] **Step 4: Change the `ReadOnly` variant + add the accessor**
+- [x] **Step 4: Change the `ReadOnly` variant + add the accessor**
 
 In `crates/motosan-sandbox/src/policy.rs`, change the enum variant:
 
@@ -141,7 +141,7 @@ Add the accessor inside `impl SandboxPolicy` (next to `network`):
     }
 ```
 
-- [ ] **Step 5: Add `deny_read_globs` to `WorkspaceWrite`**
+- [x] **Step 5: Add `deny_read_globs` to `WorkspaceWrite`**
 
 In `crates/motosan-sandbox/src/policy.rs`, add the field to the struct:
 ```rust
@@ -157,26 +157,26 @@ Initialize it in `WorkspaceWrite::new` (`deny_read_globs: Vec::new(),`) and add 
     }
 ```
 
-- [ ] **Step 6: Export `ReadOnly`**
+- [x] **Step 6: Export `ReadOnly`**
 
 In `crates/motosan-sandbox/src/lib.rs`, add `ReadOnly` to the policy re-export:
 ```rust
 pub use policy::{HostPattern, NetworkPolicy, ReadOnly, SandboxPolicy, WorkspaceWrite};
 ```
 
-- [ ] **Step 7: Fix every `ReadOnly { … }` call site (the breaking change)**
+- [x] **Step 7: Fix every `ReadOnly { … }` call site (the breaking change)**
 
 Run `cargo build -p motosan-sandbox --all-features 2>&1 | grep -A2 'ReadOnly'` to list sites. Apply mechanically across `src/policy.rs`, `src/transform.rs`, `src/seatbelt.rs`, `src/reexec.rs`, `tests/seatbelt_enforcement.rs`, `tests/transform_common.rs` (~18 sites):
 - Construction `SandboxPolicy::ReadOnly { network: X }` → `SandboxPolicy::ReadOnly(ReadOnly::new(X))`.
 - Match/destructure `SandboxPolicy::ReadOnly { network }` → `SandboxPolicy::ReadOnly(r)` then use `r.network`; `SandboxPolicy::ReadOnly { .. }` → `SandboxPolicy::ReadOnly(_)`.
 Add `use crate::policy::ReadOnly;` (or `super::ReadOnly`) where needed in test modules.
 
-- [ ] **Step 8: Run the full lib test suite**
+- [x] **Step 8: Run the full lib test suite**
 
 Run: `cargo test -p motosan-sandbox --lib`
 Expected: PASS (all builder tests green, no remaining compile errors).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/motosan-sandbox/src/policy.rs crates/motosan-sandbox/src/lib.rs crates/motosan-sandbox/src/transform.rs crates/motosan-sandbox/src/seatbelt.rs crates/motosan-sandbox/src/reexec.rs crates/motosan-sandbox/tests/seatbelt_enforcement.rs crates/motosan-sandbox/tests/transform_common.rs
@@ -192,7 +192,7 @@ git commit -m "feat(policy): ReadOnly builder + deny_read_globs on read policies
 - Modify: `crates/motosan-sandbox/src/transform.rs`
 - Test: `crates/motosan-sandbox/tests/seatbelt_enforcement.rs`
 
-- [ ] **Step 1: Write failing unit tests for the glob→regex helper**
+- [x] **Step 1: Write failing unit tests for the glob→regex helper**
 
 In `crates/motosan-sandbox/src/seatbelt.rs` `mod tests`, add:
 
@@ -213,12 +213,12 @@ fn glob_to_deny_regexes_single_star_is_segment_scoped() {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p motosan-sandbox --lib seatbelt:: 2>&1 | head -15`
 Expected: compile error — `deny_read_regexes` not found.
 
-- [ ] **Step 3: Implement the glob→regex helper**
+- [x] **Step 3: Implement the glob→regex helper**
 
 In `crates/motosan-sandbox/src/seatbelt.rs`, add:
 
@@ -288,7 +288,7 @@ fn regex_escape(s: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Append deny-read rules in `build_policy` (resolved globs)**
+- [x] **Step 4: Append deny-read rules in `build_policy` (resolved globs)**
 
 In `crates/motosan-sandbox/src/seatbelt.rs`, change `build_policy` and
 `transform_seatbelt` to accept the **resolved (absolute)** deny-read globs.
@@ -324,7 +324,7 @@ pub(crate) fn transform_seatbelt(
 ```
 Fix the `build_policy(...)` calls in `seatbelt.rs` `mod tests` to pass `&[]` (or a test glob list) as the new 3rd arg.
 
-- [ ] **Step 5: Resolve globs against cwd in `transform()` (central, both backends)**
+- [x] **Step 5: Resolve globs against cwd in `transform()` (central, both backends)**
 
 In `crates/motosan-sandbox/src/transform.rs`, add the shared resolver (module
 level):
@@ -353,12 +353,12 @@ In the macOS arm, compute and pass the resolved list:
 ```
 (The Linux Proxied arm is updated in Task 3 Step 4 to call `resolve_deny_globs` the same way.)
 
-- [ ] **Step 6: Run unit tests to verify they pass**
+- [x] **Step 6: Run unit tests to verify they pass**
 
 Run: `cargo test -p motosan-sandbox --lib seatbelt::`
 Expected: PASS.
 
-- [ ] **Step 7: Write the behavioral macOS enforcement test**
+- [x] **Step 7: Write the behavioral macOS enforcement test**
 
 In `crates/motosan-sandbox/tests/seatbelt_enforcement.rs`, append:
 
@@ -399,12 +399,12 @@ async fn deny_read_glob_hides_secret_but_not_sibling() {
 ```
 (`sh(...)` and the imports already exist at the top of this file; add `NetworkPolicy` to the `use` if not present.)
 
-- [ ] **Step 8: Run the behavioral test**
+- [x] **Step 8: Run the behavioral test**
 
 Run: `cargo test -p motosan-sandbox --test seatbelt_enforcement deny_read_glob_hides_secret_but_not_sibling -- --nocapture`
 Expected: PASS (secret `cat` non-zero/denied; `data.txt` prints `public`).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/motosan-sandbox/src/seatbelt.rs crates/motosan-sandbox/src/transform.rs crates/motosan-sandbox/tests/seatbelt_enforcement.rs
@@ -419,7 +419,7 @@ git commit -m "feat(seatbelt): enforce deny_read_globs via regex deny rules (cwd
 - Modify: `crates/motosan-sandbox/src/reexec.rs`
 - Modify: `crates/motosan-sandbox/src/transform.rs`
 
-- [ ] **Step 1: Write the failing rejection test**
+- [x] **Step 1: Write the failing rejection test**
 
 In `crates/motosan-sandbox/src/reexec.rs` `mod ipc_tests`, add:
 
@@ -447,13 +447,13 @@ fn for_proxied_carries_deny_read_globs() {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test --target x86_64-unknown-linux-gnu -p motosan-sandbox --features proxy --lib reexec:: 2>&1 | head -20`
 (Add the target once: `rustup target add x86_64-unknown-linux-gnu`. On a Linux box, drop `--target`.)
 Expected: compile error — `deny_read_globs` field / 4-arg `for_proxied` not found.
 
-- [ ] **Step 3: Add the field + reject on Landlock + accept on Proxied**
+- [x] **Step 3: Add the field + reject on Landlock + accept on Proxied**
 
 In `crates/motosan-sandbox/src/reexec.rs`, add the field to `HelperPolicy`:
 ```rust
@@ -484,7 +484,7 @@ Set `deny_read_globs: Vec::new(),` in that `Ok(Self{…})`. Change `for_proxied`
     }
 ```
 
-- [ ] **Step 4: Update the `for_proxied` caller in transform.rs**
+- [x] **Step 4: Update the `for_proxied` caller in transform.rs**
 
 In `crates/motosan-sandbox/src/transform.rs`, in the Linux Proxied arm, extract and pass the globs:
 ```rust
@@ -504,12 +504,12 @@ In `crates/motosan-sandbox/src/transform.rs`, in the Linux Proxied arm, extract 
 (The new arg is the **resolved** glob list via `resolve_deny_globs` from Task 2
 Step 5 — same cwd-resolution the macOS arm uses, so both backends agree.)
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cargo test --target x86_64-unknown-linux-gnu -p motosan-sandbox --features proxy --lib reexec::`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/motosan-sandbox/src/reexec.rs crates/motosan-sandbox/src/transform.rs
@@ -526,7 +526,7 @@ git commit -m "feat(linux): carry deny_read_globs to bwrap; reject on Landlock"
 - Modify: `crates/motosan-sandbox/src/linux.rs`
 - Test: `crates/motosan-sandbox/tests/linux_enforcement.rs`
 
-- [ ] **Step 1: Add linux-only deps**
+- [x] **Step 1: Add linux-only deps**
 
 In `crates/motosan-sandbox/Cargo.toml`, under `[target.'cfg(target_os = "linux")'.dependencies]`, add:
 ```toml
@@ -534,7 +534,7 @@ globset = "0.4"
 walkdir = "2"
 ```
 
-- [ ] **Step 2: Write failing unit tests for expansion + argv**
+- [x] **Step 2: Write failing unit tests for expansion + argv**
 
 In `crates/motosan-sandbox/src/linux_bwrap.rs` `mod tests`, add:
 
@@ -576,12 +576,12 @@ fn build_bwrap_argv_emits_masks_after_writable_binds() {
 ```
 (Note: Step 4 changes `build_bwrap_argv`'s 4th param to pre-expanded **mask paths**, not raw globs — see below.)
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test --target x86_64-unknown-linux-gnu -p motosan-sandbox --features proxy --lib linux_bwrap:: 2>&1 | head -20`
 Expected: compile error — `expand_deny_read_masks` not found / arity mismatch.
 
-- [ ] **Step 4: Implement expansion + thread masks into argv**
+- [x] **Step 4: Implement expansion + thread masks into argv**
 
 In `crates/motosan-sandbox/src/linux_bwrap.rs`, add the expansion helper:
 ```rust
@@ -661,7 +661,7 @@ Immediately before the `--unshare-user` block (i.e. after the `read_only_subpath
 ```
 Update the existing `build_bwrap_argv` test(s) in this file to pass a `&[]` for the new param.
 
-- [ ] **Step 5: Pass masks from `linux.rs`**
+- [x] **Step 5: Pass masks from `linux.rs`**
 
 In `crates/motosan-sandbox/src/linux.rs`, where `build_bwrap_argv` is called (around line 161), expand first and pass:
 ```rust
@@ -676,12 +676,12 @@ In `crates/motosan-sandbox/src/linux.rs`, where `build_bwrap_argv` is called (ar
 ```
 (`die`, `HELPER_EXIT_NOT_ENFORCED` already exist in `linux.rs`.)
 
-- [ ] **Step 6: Run unit tests**
+- [x] **Step 6: Run unit tests**
 
 Run: `cargo test --target x86_64-unknown-linux-gnu -p motosan-sandbox --features proxy --lib linux_bwrap::`
 Expected: PASS.
 
-- [ ] **Step 7: Write the behavioral Linux enforcement tests**
+- [x] **Step 7: Write the behavioral Linux enforcement tests**
 
 In `crates/motosan-sandbox/tests/linux_enforcement.rs`, append (follow the file's existing proxied-test helpers/imports; secret lives inside a writable root to also prove ordering):
 
@@ -711,12 +711,12 @@ async fn deny_read_masks_secret_inside_writable_root() {
 ```
 (Use whatever bwrap-presence guard + `Sandbox` constructor the existing proxied tests in this file use — match their `system_bwrap()`/`sandbox_with_helper()`/`sh()` names; rename to the real helpers if they differ.)
 
-- [ ] **Step 8: Verify it compiles for Linux (runs on CI)**
+- [x] **Step 8: Verify it compiles for Linux (runs on CI)**
 
 Run: `cargo clippy --target x86_64-unknown-linux-gnu --all-features --all-targets -- -D warnings`
 Expected: clean. (The test actually executes only on the Linux CI runner; locally we confirm it compiles + lints.)
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/motosan-sandbox/Cargo.toml crates/motosan-sandbox/src/linux_bwrap.rs crates/motosan-sandbox/src/linux.rs crates/motosan-sandbox/tests/linux_enforcement.rs
@@ -730,7 +730,7 @@ git commit -m "feat(linux): expand deny_read_globs to bwrap masks (emitted last)
 **Files:**
 - Modify: `crates/motosan-sandbox/README.md`
 
-- [ ] **Step 1: Document deny-read in the README**
+- [x] **Step 1: Document deny-read in the README**
 
 In `crates/motosan-sandbox/README.md`, under "Security notes", add:
 ```markdown
@@ -747,14 +747,14 @@ In `crates/motosan-sandbox/README.md`, under "Security notes", add:
   walk much of the tree on Linux — prefer prefixed globs.
 ```
 
-- [ ] **Step 2: Commit docs**
+- [x] **Step 2: Commit docs**
 
 ```bash
 git add crates/motosan-sandbox/README.md
 git commit -m "docs(readme): document deny_read glob secret-hiding"
 ```
 
-- [ ] **Step 3: Full verification gate**
+- [x] **Step 3: Full verification gate**
 
 Run each; all must pass:
 ```bash
