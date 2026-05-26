@@ -53,7 +53,11 @@ A single `cargo run --example financial_sandbox` that:
 - `.github/workflows/ci.yml` — add a step that runs the example as a smoke test
   (idiomatic way to keep an example honest; no nested-cargo `tests/` file).
 - `crates/motosan-sandbox/README.md` — "Financial sandbox example" section +
-  external git-dependency stanza + the two-phase provisioning note.
+  external git-dependency stanza + the two-phase provisioning note + a one-line
+  caveat that on **bwrap-less Linux the example self-skips**, because both
+  features it showcases (`Proxied` and `deny_read`) are bwrap-only on Linux
+  (`deny_read` is `Unsupported` on the Landlock path by design). Fully runnable
+  on macOS and bwrap-equipped Linux (incl. CI-ubuntu).
 
 ## Architecture / flow
 
@@ -68,8 +72,10 @@ The harness (`financial_sandbox.rs`):
 3. Write `strategy.py` (from `include_str!`) into the workspace.
 4. **Phase A — provision** (`WorkspaceWrite::new([ws]).network(Proxied{["pypi.org",
    "files.pythonhosted.org"]})`; env carries `PATH`, `HOME=ws`,
-   `PIP_CACHE_DIR=ws/.cache/pip`, `TMPDIR=ws/tmp`): run `python3 -m venv .venv`
-   (deterministic — venv needs no network). Then a best-effort
+   `PIP_CACHE_DIR=ws/.cache/pip`, `TMPDIR=ws/tmp`): the harness first
+   `create_dir_all`s `ws/tmp` and `ws/.cache/pip` (the redirected dirs must
+   exist or pip can't write). Then run `python3 -m venv .venv` (deterministic —
+   venv needs no network). Then a best-effort
    `.venv/bin/pip install --no-input --quiet packaging` step whose failure
    (offline / no bwrap) is printed, not fatal. Print the venv-create exit code.
    The PyPI allowlist here is deliberately *different* from Phase B's exchange
@@ -78,7 +84,10 @@ The harness (`financial_sandbox.rs`):
    .deny_read("<ws>/.env")`; curated env = `PATH` only; `RunOpts{ timeout: 30s,
    max_output_bytes: 1 MiB }`): run the strategy with `.venv/bin/python strategy.py`
    if the venv exists, else system `python3`. Print exit code + captured stdout.
-6. Exit 0 on success, or non-zero only if the harness itself errors.
+6. **Propagate the Phase B strategy's exit code** as the harness's own exit code
+   (0 = all deterministic controls held; non-zero = a control leaked open). This
+   is what makes the CI smoke step a real regression guard. Harness-level skips
+   (`python3`/`bwrap` absent) and best-effort failures still exit 0.
 
 The strategy (`strategy.py`, stdlib only) runs each check, prints
 `PASS <name>` / `FAIL <name> <detail>`, and `sys.exit(1)` if any **deterministic**
@@ -90,12 +99,15 @@ control failed open:
 | 2 | write confinement | write `/tmp/motosan_escape` | raises `PermissionError`/`OSError` |
 | 3 | read normal file | read `input.csv` | read succeeds |
 | 4 | secret deny-read | read `.env` | raises `PermissionError`/`OSError` |
-| 5 | network block | `socket.create_connection(("example.com",443),2)` | raises (blocked) |
-| 6 | network allow (best-effort) | connect `api.binance.com:443` | printed only — never affects exit |
+| 5 | network allowlist **deny** | `urllib.request.urlopen("https://example.com", timeout=3)` (uses the injected proxy env) | raises — the proxy refuses the `CONNECT` to a non-allowlisted host, **locally, no internet** |
+| 6 | direct-egress **wall** | `socket.create_connection(("example.com",443),2)` | raises — direct egress blocked (kernel on macOS / `ENETUNREACH` in the netns) |
+| 7 | network **allow** (best-effort) | `urllib.request.urlopen("https://api.binance.com/api/v3/ping", timeout=3)` | printed only — needs internet, never affects exit |
 
-Checks 1–5 are deterministic and offline; failing any of them open → exit 1
-(which the harness surfaces and the smoke test asserts against). Check 6 is
-informational.
+Checks 1–6 are deterministic and offline; failing any of them open → `sys.exit(1)`
+(which the harness propagates so the CI smoke step goes red). Check 7 is
+informational/best-effort. Check 5 exercises the host **allowlist** itself
+(proxy refuses a non-allowlisted host); check 6 exercises the egress **wall**
+(no proxy bypass) — both matter for a financial sandbox.
 
 ## Error handling / reliability
 
