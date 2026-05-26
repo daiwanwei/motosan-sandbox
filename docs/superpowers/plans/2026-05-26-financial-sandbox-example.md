@@ -281,6 +281,9 @@ async fn main() {
     }
     let code = out.exit_code.unwrap_or(1);
     println!("strategy exit={code} (0 = all deterministic controls held)");
+    // `process::exit` skips destructors — drop the TempDir first so repeated
+    // runs don't litter $TMPDIR (ws is an independent PathBuf, safe to outlive).
+    drop(tmp);
     // Propagate so a leaked control fails the CI smoke step.
     std::process::exit(code);
 }
