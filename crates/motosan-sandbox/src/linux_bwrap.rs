@@ -188,7 +188,10 @@ mod tests {
         let s = argv.join(" ");
         let writable_idx = s.find("--bind /ws /ws").unwrap();
         let mask_idx = s.find("--tmpfs /ws/secret").unwrap();
-        assert!(mask_idx > writable_idx, "masks must come after writable binds");
+        assert!(
+            mask_idx > writable_idx,
+            "masks must come after writable binds"
+        );
     }
 
     #[test]

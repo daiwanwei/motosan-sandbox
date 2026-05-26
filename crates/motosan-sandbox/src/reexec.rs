@@ -237,7 +237,9 @@ mod ipc_tests {
 
     #[test]
     fn read_only_maps_to_no_roots() {
-        let h = HelperPolicy::from_policy(&SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Allowed)))
+        let h = HelperPolicy::from_policy(&SandboxPolicy::ReadOnly(ReadOnly::new(
+            NetworkPolicy::Allowed,
+        )))
         .unwrap();
         assert!(h.writable_roots.is_empty());
         assert_eq!(
@@ -265,9 +267,8 @@ mod ipc_tests {
     fn proxied_rejected_in_from_policy() {
         // `from_policy` is for the Landlock path only; Proxied must go
         // through `for_proxied` so a `route_spec` is supplied.
-        let p = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
-            allowlist: vec![],
-        }));
+        let p =
+            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied { allowlist: vec![] }));
         assert!(matches!(
             HelperPolicy::from_policy(&p),
             Err(Error::Unsupported(_))
@@ -295,9 +296,8 @@ mod ipc_tests {
 
     #[test]
     fn deny_read_globs_rejected_on_landlock_path() {
-        let policy = SandboxPolicy::ReadOnly(
-            ReadOnly::new(NetworkPolicy::Blocked).deny_read("**/.env"),
-        );
+        let policy =
+            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked).deny_read("**/.env"));
         assert!(matches!(
             HelperPolicy::from_policy(&policy),
             Err(Error::Unsupported(_))

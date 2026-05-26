@@ -209,10 +209,8 @@ mod tests {
             &["a".to_string()]
         );
         assert_eq!(
-            SandboxPolicy::WorkspaceWrite(
-                WorkspaceWrite::new(vec!["/ws".into()]).deny_read("b")
-            )
-            .deny_read_globs(),
+            SandboxPolicy::WorkspaceWrite(WorkspaceWrite::new(vec!["/ws".into()]).deny_read("b"))
+                .deny_read_globs(),
             &["b".to_string()]
         );
     }
@@ -244,8 +242,7 @@ mod tests {
             NetworkPolicy::Allowed
         );
         assert_eq!(
-            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked))
-            .network(),
+            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)).network(),
             NetworkPolicy::Blocked
         );
         let w = SandboxPolicy::WorkspaceWrite(
@@ -257,8 +254,7 @@ mod tests {
     #[test]
     fn is_full_access_only_for_danger() {
         assert!(SandboxPolicy::DangerFullAccess.is_full_access());
-        assert!(!SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked))
-        .is_full_access());
+        assert!(!SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)).is_full_access());
     }
 }
 

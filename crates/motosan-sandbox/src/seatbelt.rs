@@ -316,9 +316,8 @@ mod tests {
 
     #[test]
     fn proxied_without_addr_fails_closed() {
-        let policy = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
-            allowlist: vec![],
-        }));
+        let policy =
+            SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied { allowlist: vec![] }));
         let err = build_policy(&policy, None, &[]).unwrap_err();
         assert!(
             matches!(err, Error::Transform(ref m) if m.contains("proxied")),

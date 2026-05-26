@@ -214,9 +214,7 @@ mod tests {
         // cooperative tools would self-restrict and refuse to use the proxy.
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied {
-                allowlist: vec![],
-            })),
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied { allowlist: vec![] })),
         );
         assert!(!env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
     }

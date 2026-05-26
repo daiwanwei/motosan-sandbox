@@ -196,8 +196,7 @@ async fn deny_read_glob_hides_secret_but_not_sibling() {
 
     let sb = Sandbox::new();
     let policy = SandboxPolicy::ReadOnly(
-        ReadOnly::new(NetworkPolicy::Blocked)
-            .deny_read(format!("{}/.env", root.display())),
+        ReadOnly::new(NetworkPolicy::Blocked).deny_read(format!("{}/.env", root.display())),
     );
 
     // secret: denied
