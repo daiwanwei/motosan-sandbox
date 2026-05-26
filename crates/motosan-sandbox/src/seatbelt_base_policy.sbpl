@@ -8,6 +8,20 @@
 (allow sysctl-read)
 (allow mach-lookup)
 
+; --- POSIX IPC. Semaphores (UNCONDITIONAL): required by ALL `multiprocessing`
+;     (Lock/Queue) — without this `sem_open()` returns EPERM and any mp dies.
+;     Shared memory (NARROW): opened only for the Intel-OpenMP registered-lib
+;     name so MKL/libomp-threaded native libs work. General shm (arbitrary
+;     /psm_* names, i.e. `multiprocessing.shared_memory`) stays DENIED. NOT
+;     needed for in-process threaded NumPy/pandas/OpenBLAS (pthreads, no IPC).
+;     Byte-for-byte copy of Codex's seatbelt base policy
+;     (codex-rs/sandboxing/src/seatbelt_base_policy.sbpl). ---
+(allow ipc-posix-sem)
+(allow ipc-posix-shm-read-data
+  ipc-posix-shm-write-create
+  ipc-posix-shm-write-unlink
+  (ipc-posix-name-regex #"^/__KMP_REGISTERED_LIB_[0-9]+$"))
+
 ; --- whole filesystem is READABLE; writes are governed by appended rules ---
 (allow file-read*)
 

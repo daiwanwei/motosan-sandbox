@@ -61,6 +61,28 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 - **macOS paths are resolved.** Canonicalize writable roots (`/var` →
   `/private/var`) before building a policy.
 - macOS `sandbox-exec` is deprecated by Apple but still functional; tracked risk.
+- **macOS grants POSIX semaphores, and shared memory narrowly.** The Seatbelt
+  base policy allows `ipc-posix-sem` **unconditionally** — required by all
+  `multiprocessing` (Lock/Queue); without it `sem_open()` returns `EPERM` and
+  any `multiprocessing` use dies. Shared memory is granted **only** for the
+  Intel-OpenMP registered-lib name (`^/__KMP_REGISTERED_LIB_[0-9]+$`), so
+  MKL/libomp-threaded native libs work. (In-process threaded NumPy / pandas /
+  OpenBLAS needs neither — it uses pthreads, no POSIX IPC.) This is a
+  byte-for-byte copy of Codex's base policy. The semaphore grant is a local IPC
+  channel, but opens no network egress and no filesystem-escape path — an
+  exfiltration vector only if a colluding process already runs on the host,
+  outside the untrusted-script threat model.
+
+> **Known macOS limitations (tracked, not yet fixed):**
+> - **General `multiprocessing.shared_memory` is denied by design.** It uses
+>   arbitrary `/psm_*` names not covered by the narrow OpenMP-only shm grant.
+>   Supporting it needs an unconditional shm grant (wider covert-channel
+>   surface); widen the name regex only if a real workload requires it.
+> - `multiprocessing.Pool()` still hangs: macOS uses the `spawn` start method,
+>   which re-execs the interpreter and sets up IPC queues needing further
+>   Seatbelt surface. Semaphore-only primitives (Lock/Queue) work.
+> - PTY (`pseudo-tty`) is not granted; interactive TTY tools may misbehave.
+> - Linux parity for POSIX IPC (`/dev/shm` under Landlock) is not yet addressed.
 
 ## Linux (Phase 1)
 
