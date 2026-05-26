@@ -142,3 +142,51 @@ async fn python_posix_semaphore_is_allowed() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("ok"));
 }
+
+/// The narrow shm grant covers only the OpenMP lib name. General
+/// `multiprocessing.shared_memory` (random `/psm_*` names) must STAY denied —
+/// this pins the deliberate scope decision (see plan §Scope). NOTE: Apple's
+/// `python3` shim prints a harmless `xcrun ... Operation not permitted` banner
+/// on stderr even on success, so we assert on the distinctive `/psm_*` name +
+/// a non-zero exit, NOT on the generic "Operation not permitted" string.
+#[tokio::test]
+async fn python_general_shared_memory_stays_denied() {
+    let Some(py) = python3() else {
+        eprintln!("skip: python3 not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let sb = Sandbox::new();
+    let policy = SandboxPolicy::ReadOnly {
+        network: NetworkPolicy::Blocked,
+    };
+    // SharedMemory(create=True) calls shm_open(O_CREAT) on a /psm_* name,
+    // which the narrow OpenMP-only grant does not cover.
+    let script = "import multiprocessing.shared_memory as sm; \
+                  sm.SharedMemory(create=True, size=64); print('UNEXPECTED ok')";
+    let out = sb
+        .run(
+            SandboxCommand {
+                program: py.into(),
+                args: vec!["-c".into(), script.into()],
+                cwd,
+                env: path_env(),
+            },
+            &policy,
+            RunOpts::default(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        out.exit_code,
+        Some(0),
+        "general shared_memory must stay denied; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("psm_"),
+        "expected the POSIX shared-memory (/psm_*) denial; stderr: {stderr}"
+    );
+}
