@@ -137,6 +137,7 @@ pub(crate) enum HelperMode {
 pub(crate) struct HelperPolicy {
     pub writable_roots: Vec<PathBuf>,
     pub read_only_subpaths: Vec<PathBuf>,
+    pub deny_read_globs: Vec<String>,
     pub mode: HelperMode,
 }
 
@@ -169,9 +170,15 @@ impl HelperPolicy {
                 w.writable_roots.clone()
             }
         };
+        // Landlock is allow-only: cannot carve a read-deny. Fail-closed,
+        // exactly like read_only_subpaths above.
+        if !policy.deny_read_globs().is_empty() {
+            return Err(Error::Unsupported(crate::SandboxKind::LinuxSeccomp));
+        }
         Ok(Self {
             writable_roots,
             read_only_subpaths: Vec::new(),
+            deny_read_globs: Vec::new(),
             mode: HelperMode::Landlock { network_blocked },
         })
     }
@@ -183,11 +190,13 @@ impl HelperPolicy {
     pub(crate) fn for_proxied(
         writable_roots: Vec<PathBuf>,
         read_only_subpaths: Vec<PathBuf>,
+        deny_read_globs: Vec<String>,
         route_spec: ProxyRouteSpec,
     ) -> Self {
         Self {
             writable_roots,
             read_only_subpaths,
+            deny_read_globs,
             mode: HelperMode::ProxiedOuter { route_spec },
         }
     }
@@ -273,11 +282,37 @@ mod ipc_tests {
                 uds_path: "/tmp/x.sock".into(),
             }],
         };
-        let h =
-            HelperPolicy::for_proxied(vec!["/ws".into()], vec!["/ws/secret".into()], spec.clone());
+        let h = HelperPolicy::for_proxied(
+            vec!["/ws".into()],
+            vec!["/ws/secret".into()],
+            vec![],
+            spec.clone(),
+        );
         assert_eq!(h.writable_roots, vec![PathBuf::from("/ws")]);
         assert_eq!(h.read_only_subpaths, vec![PathBuf::from("/ws/secret")]);
         assert_eq!(h.mode, HelperMode::ProxiedOuter { route_spec: spec });
+    }
+
+    #[test]
+    fn deny_read_globs_rejected_on_landlock_path() {
+        let policy = SandboxPolicy::ReadOnly(
+            ReadOnly::new(NetworkPolicy::Blocked).deny_read("**/.env"),
+        );
+        assert!(matches!(
+            HelperPolicy::from_policy(&policy),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn for_proxied_carries_deny_read_globs() {
+        let h = HelperPolicy::for_proxied(
+            vec!["/ws".into()],
+            vec![],
+            vec!["**/.env".to_string()],
+            ProxyRouteSpec { routes: vec![] },
+        );
+        assert_eq!(h.deny_read_globs, vec!["**/.env".to_string()]);
     }
 
     #[test]
@@ -285,6 +320,7 @@ mod ipc_tests {
         let landlock = HelperPolicy {
             writable_roots: vec!["/a".into()],
             read_only_subpaths: vec![],
+            deny_read_globs: vec![],
             mode: HelperMode::Landlock {
                 network_blocked: true,
             },
@@ -295,11 +331,16 @@ mod ipc_tests {
                 uds_path: "/tmp/r.sock".into(),
             }],
         };
-        let outer =
-            HelperPolicy::for_proxied(vec!["/ws".into()], vec!["/ws/.git".into()], spec.clone());
+        let outer = HelperPolicy::for_proxied(
+            vec!["/ws".into()],
+            vec!["/ws/.git".into()],
+            vec![],
+            spec.clone(),
+        );
         let inner = HelperPolicy {
             writable_roots: vec!["/ws".into()],
             read_only_subpaths: vec!["/ws/.git".into()],
+            deny_read_globs: vec![],
             mode: HelperMode::ProxiedInner { route_spec: spec },
         };
         for h in [landlock, outer, inner] {
@@ -365,6 +406,7 @@ mod build_tests {
         let helper = HelperPolicy {
             writable_roots: vec!["/ws".into()],
             read_only_subpaths: vec![],
+            deny_read_globs: vec![],
             mode: HelperMode::Landlock {
                 network_blocked: true,
             },
@@ -394,6 +436,7 @@ mod build_tests {
         // cooperative tools would self-restrict and refuse to use the proxy.
         let helper = HelperPolicy::for_proxied(
             vec!["/ws".into()],
+            vec![],
             vec![],
             ProxyRouteSpec {
                 routes: vec![ProxyRouteEntry {

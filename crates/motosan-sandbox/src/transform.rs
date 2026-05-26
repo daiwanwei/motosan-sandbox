@@ -82,6 +82,7 @@ impl Sandbox {
                         let helper = HelperPolicy::for_proxied(
                             writable_roots,
                             read_only_subpaths,
+                            resolve_deny_globs(policy.deny_read_globs(), &cmd.cwd),
                             route_spec,
                         );
                         let helper_exe = match &self.helper_exe {
