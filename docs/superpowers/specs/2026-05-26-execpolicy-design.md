@@ -68,26 +68,43 @@ impl ExecPolicy {
         Self::default()
     }
 
-    /// Permit a program by basename (e.g. `"python3"`, `"pip"`). Chainable.
-    /// Matches the program's file name, so `/usr/bin/python3` and `python3`
-    /// both satisfy `allow("python3")`.
+    /// Permit a program. Chainable. An entry **containing `/`** is matched as an
+    /// **exact full path** (e.g. `allow("/usr/bin/python3")` permits only that
+    /// path); an entry **without `/`** is matched by **basename** (e.g.
+    /// `allow("python3")` permits `/usr/bin/python3`, `./python3`, or bare
+    /// `python3`). Use a path entry to stop an untrusted command from running a
+    /// look-alike binary at an attacker-chosen path.
     pub fn allow(mut self, program: impl Into<String>) -> Self {
         self.allowed.insert(program.into());
         self
     }
 
-    /// Vet a command. Returns `Allow` iff its program basename is allow-listed.
+    /// Vet a command. `Allow` iff the program satisfies some allowlist entry
+    /// (exact-path entry == full program; basename entry == program basename).
     pub fn check(&self, cmd: &SandboxCommand) -> ExecDecision {
-        match program_basename(&cmd.program) {
-            Some(base) if self.allowed.contains(&base) => ExecDecision::Allow,
-            Some(base) => ExecDecision::Deny {
-                reason: format!("program '{base}' is not in the exec allowlist"),
-                program: base,
-            },
-            None => ExecDecision::Deny {
-                program: cmd.program.to_string_lossy().into_owned(),
+        let full = cmd.program.to_string_lossy();
+        if full.is_empty() {
+            return ExecDecision::Deny {
+                program: String::new(),
                 reason: "command has no usable program name".to_string(),
-            },
+            };
+        }
+        let base = program_basename(&cmd.program);
+        let matched = self.allowed.iter().any(|entry| {
+            if entry.contains('/') {
+                *entry == *full // exact full-path match
+            } else {
+                base.as_deref() == Some(entry.as_str()) // basename match
+            }
+        });
+        if matched {
+            ExecDecision::Allow
+        } else {
+            let program = base.unwrap_or_else(|| full.into_owned());
+            ExecDecision::Deny {
+                reason: format!("program '{program}' is not in the exec allowlist"),
+                program,
+            }
         }
     }
 }
@@ -136,13 +153,17 @@ match gate.check(&cmd) {
 
 ## Matching semantics
 
-- Take `cmd.program`'s basename (`Path::file_name`).
-- In `allowed` → `Allow`. Not in `allowed` (incl. empty allowlist) →
-  `Deny{program, reason}`.
-- No basename — empty string or a pure-separator program (`"/"`) → `Deny` with a
-  "no usable program name" reason. (Note: `"foo/"` resolves to basename `"foo"`;
-  `Path::file_name` strips a trailing slash.)
-- No argument inspection; no `$PATH` / symlink resolution. Basename only.
+- Empty program string → `Deny` "no usable program name".
+- Otherwise the command matches if ANY allowlist entry matches:
+  - entry **contains `/`** → matches when it **equals the full program string**
+    (exact path, e.g. `/usr/bin/python3`);
+  - entry **without `/`** → matches when it **equals the program's basename**
+    (`Path::file_name`), so `python3`, `/usr/bin/python3`, and `./python3` all
+    satisfy `allow("python3")`.
+- No match (incl. empty allowlist) → `Deny{program, reason}`; the reason names
+  the basename, or the full string when there is no basename (e.g. `"/"`).
+- No argument inspection; no `$PATH` / symlink resolution. (Note: `"foo/"`
+  resolves to basename `"foo"`; `Path::file_name` strips a trailing slash.)
 
 ## Honest caveat (must be documented)
 
@@ -151,6 +172,11 @@ match gate.check(&cmd) {
   currently allows `process-exec` broadly), nor
 - constrain what an allowed interpreter does (`python3 -c "…"` can do anything
   the OS sandbox permits).
+
+Also note **basename entries are path-agnostic**: `allow("python3")` permits a
+binary named `python3` at *any* path, including an attacker-chosen one. When the
+command is untrusted and you care *which* binary runs, use an **exact-path
+entry** (`allow("/usr/bin/python3")`); basename entries are for convenience.
 
 It is a coarse second gate; the OS sandbox (network/fs) is the real containment.
 Most valuable when the command itself is untrusted input (LLM/agent-proposed).
@@ -161,19 +187,27 @@ Most valuable when the command itself is untrusted input (LLM/agent-proposed).
   unit tests.
 - `crates/motosan-sandbox/src/lib.rs` — **modify**: `mod execpolicy;` + re-export.
 - `crates/motosan-sandbox/README.md` — **modify**: "Command allowlist
-  (ExecPolicy)" section with the two-gate snippet + the caveat.
+  (ExecPolicy)" section with the two-gate snippet + the caveat, including that
+  basename entries are path-agnostic (use an exact path to pin) and that a venv
+  interpreter's basename is `python`, not `python3`.
 
 ## Testing (all unit, no OS / no integration)
 
 The gate is pure logic, so every test is a plain `#[test]` runnable on all
 platforms:
 
-- allow-listed program passes — bare (`python3`) and absolute (`/usr/bin/python3`).
-- non-listed program → `Deny`, reason names the basename.
+- basename entry: `allow("python3")` allows bare `python3`, `/usr/bin/python3`,
+  and `./python3` (path-agnostic).
+- `.venv/bin/pip` → basename `pip` → allowed by `allow("pip")` (the case the
+  financial example needs).
+- non-listed program (`curl`) → `Deny`, reason names the basename.
 - empty policy (`ExecPolicy::new()`) denies everything.
-- empty program string / pure-slash program (`"/"`) → `Deny` "no usable program name".
-- relative program (`./python3`) → basename `python3` → matches `allow("python3")`
-  (documented: basename match; path is not vetted — caveat covers the risk).
+- empty program string `""` → `Deny` "no usable program name".
+- pure-slash program `"/"` → `Deny` (reason names `/`; it is not empty, so not
+  the "no usable program name" path).
+- **exact-path entry:** `allow("/usr/bin/python3")` allows exactly
+  `/usr/bin/python3` but **denies** `/tmp/evil/python3` (same basename, different
+  path) and bare `python3`.
 - `is_allowed`/`is_denied` helpers agree with the variant.
 - builder chaining accumulates the allowlist.
 
@@ -181,6 +215,7 @@ platforms:
 
 - Prefix-token / argument rules (extend `allow` to ordered token patterns).
 - `Prompt`/ask decision variant.
-- `host_executable`-style absolute-path pinning for basename rules (closes the
-  `./python3` basename-match risk).
+- `host_executable`-style pinning: allow a *basename* but only for a SET of
+  absolute paths. The slash→exact rule already lets a consumer pin a single
+  path; this is the multi-path generalization.
 - Optional convenience integration in `Sandbox::run` behind a separate method.
