@@ -50,6 +50,34 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 }
 ```
 
+## Example: financial sandbox
+
+A runnable end-to-end demo of running untrusted strategy code safely:
+
+```bash
+cargo run --example financial_sandbox --features proxy
+```
+
+It shows the **two-phase** pattern — a permissive *provision* policy (venv +
+best-effort `pip`, allowlisted to `pypi.org`) then a tight *run* policy
+(allowlisted to `api.binance.com`, with `.env` hidden via `deny_read`, and a
+`PATH`-only env) — and a stdlib Python strategy that asserts every control:
+workspace-write OK, write-outside denied, secret read denied, non-allowlisted
+host denied (through the proxy), and direct egress walled. The strategy exits
+non-zero if any control leaks, so the example doubles as a regression check.
+
+Consuming `motosan-sandbox` from your own project:
+
+```toml
+[dependencies]
+motosan-sandbox = { git = "https://github.com/motosan-dev/motosan-sandbox", features = ["proxy"] }
+```
+
+> **Linux note:** the example self-skips on a box without `bwrap`, because both
+> features it showcases (`Proxied` egress and `deny_read`) are bwrap-only on
+> Linux (`deny_read` is `Unsupported` on the Landlock path by design). It runs
+> fully on macOS and on bwrap-equipped Linux.
+
 ## Security notes
 
 - **Hide secrets with `deny_read`.** `ReadOnly`/`WorkspaceWrite` accept
