@@ -110,16 +110,21 @@ let policy = SandboxPolicy::ReadOnly(
 - A new accessor `SandboxPolicy::deny_read_globs(&self) -> &[String]` returns the
   effective list (`&[]` for `DangerFullAccess`), so backends read it uniformly —
   parallel to the existing `SandboxPolicy::network()`.
-- All current `SandboxPolicy::ReadOnly { network }` constructions are updated to
-  `SandboxPolicy::ReadOnly(ReadOnly::new(network))` (tests + the agent-loop spike
-  in `tests/loop_integration.rs`).
+- Restructuring `ReadOnly` is a breaking change touching **~18 `ReadOnly { … }`
+  sites across 6 files** — both constructions and `match`/destructure arms in
+  `src/policy.rs`, `src/transform.rs`, `src/seatbelt.rs`, `src/reexec.rs`, plus
+  `tests/seatbelt_enforcement.rs` and `tests/transform_common.rs`. (`loop_integration.rs`
+  does **not** use `ReadOnly`.) All become `ReadOnly(ReadOnly::new(network))` /
+  `ReadOnly(ro)` + `ro.network`. Mechanical but budget for it in the plan.
+- Relative globs resolve against `SandboxCommand::cwd`; absolute globs are used
+  as-is. This cwd is threaded into the transform (already available there).
 
 ## Backend enforcement
 
 | Backend | Rendering |
 |---|---|
-| **macOS Seatbelt** | per glob → anchored regex; append `(deny file-read* (regex #"…"))` + `(deny file-write-unlink (regex #"…"))`. Mirrors Codex incl. the canonicalized static-prefix second regex. Pure string transform, no FS walk. |
-| **Linux bwrap (`Proxied`)** | expand each glob by walking from its **static (non-wildcard) prefix** with `globset` + `walkdir`; mask each match — files via `--ro-bind /dev/null <p>`, directories via `--tmpfs <p>`. |
+| **macOS Seatbelt** | per glob → anchored regex; append `(deny file-read* (regex #"…"))` (verified on-machine: a deny appended after the base `(allow file-read*)` overrides it — SBPL last-match-wins). We emit the read deny only; we do **not** mirror Codex's extra `(deny file-write-unlink …)` — writes/unlinks outside writable roots are already denied, so it adds nothing for a read-deny feature. The glob's **static prefix is canonicalized** (`/tmp`→`/private/tmp`) so the regex matches the resolved path the kernel checks. |
+| **Linux bwrap (`Proxied`)** | expand each glob by walking from its **static (non-wildcard) prefix** with `globset` + `walkdir`; mask each match — files via `--ro-bind /dev/null <p>`, directories via `--tmpfs <p>`. **Ordering: mask mounts are emitted LAST in the bwrap argv** — after `--ro-bind / /` and after the writable `--bind` roots — because bwrap applies mounts in argv order; otherwise a writable `--bind` would re-expose a secret living under a writable root. |
 | **Linux Landlock (`Blocked`/`Allowed`)** | `Error::Unsupported(LinuxSeccomp)` when `deny_read_globs` is non-empty. Identical to `read_only_subpaths` handling in `reexec.rs` (`policy.is_full_access()` exempt). |
 
 `DangerFullAccess` ignores `deny_read_globs` (no sandbox).
@@ -167,6 +172,8 @@ let policy = SandboxPolicy::ReadOnly(
 
 **Behavioral — Linux** (`tests/linux_enforcement.rs`, `Proxied`/bwrap)
 - Same shape: secret masked (read fails), sibling/parent dir still readable.
+- **Ordering test:** a deny-read secret living *inside a writable root* is still
+  masked (proves mask mounts are emitted after the writable `--bind`).
 
 **Verification gate**
 `cargo test --all-features`, lib tests, `clippy --all-features --all-targets
