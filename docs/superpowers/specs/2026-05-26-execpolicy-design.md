@@ -14,8 +14,9 @@ before the OS sandbox engages.
 
 ## Goal
 
-A small, standalone `ExecPolicy` that vets the **entry command** by **program
-name**, default-deny, returning `Allow` / `Deny{reason}`. The consumer evaluates
+A small, standalone `ExecPolicy` that vets the **entry command** by program
+**basename** OR **exact path** (consumer's choice per entry), default-deny,
+returning `Allow` / `Deny{reason}`. The consumer evaluates
 it *before* `Sandbox::run`. Decoupled from `run()` (mirrors Codex's two-gate
 architecture and motosan's "this crate only runs a command under a policy"
 philosophy).
@@ -30,21 +31,23 @@ philosophy).
   are user-authored text; motosan consumers build rules in Rust.
 - **No `Prompt`/ask decision.** A consumer wanting human-gating treats any
   `Deny` as "ask." A third variant is not needed to express that.
-- **No path resolution / `host_executable` pinning.** Matching is by basename
-  only (documented limitation). Path-pinning is a noted future refinement.
+- **No `$PATH` lookup / symlink resolution.** Exact-path entries match the
+  program string **as given**; they do not search `$PATH` or canonicalize
+  symlinks. (Single-path pinning IS supported via slash entries — see Matching;
+  the `host_executable`-style multi-path pinning is a noted follow-up.)
 - **No wiring into `Sandbox::run`.** It stays a standalone gate the consumer
   composes.
 
 ## Why minimal (the program-name decision)
 
 `ExecPolicy` is a *coarse second gate*; the load-bearing containment is the OS
-sandbox (network allowlist, write confinement, deny-read). Program-name
-granularity matches exactly what this gate can enforce honestly — arg-level
-rules would overpromise (a permitted `python3` can run arbitrary code regardless
-of its args). Keeping it to a name allowlist makes it ~one tiny, fully
-unit-testable module with almost no logic to get wrong. If a real need for arg
-rules appears, the `allow(name)` API extends to prefix-token rules without a
-breaking change.
+sandbox (network allowlist, write confinement, deny-read). Program-level
+granularity (basename or exact path) matches exactly what this gate can enforce
+honestly — arg-level rules would overpromise (a permitted `python3` can run
+arbitrary code regardless of its args). Keeping it to a program allowlist makes
+it ~one tiny, fully unit-testable module with almost no logic to get wrong. If a
+real need for arg rules appears, the `allow(...)` API extends to prefix-token
+rules without a breaking change.
 
 ## API
 
@@ -55,8 +58,10 @@ feature-gated):
 use std::collections::BTreeSet;
 use crate::types::SandboxCommand;
 
-/// Allowlist of program basenames permitted to run. Default-deny: a command
-/// whose program basename is not in the set is denied.
+/// Allowlist of program entries permitted to run. Each entry is either a
+/// **basename** (no `/`; matches the program's `Path::file_name`) or an
+/// **exact path** (contains `/`; matches the program string verbatim).
+/// Default-deny: a command not matched by any entry is denied.
 #[derive(Debug, Default, Clone)]
 pub struct ExecPolicy {
     allowed: BTreeSet<String>,
@@ -127,7 +132,9 @@ impl ExecDecision {
 ```
 
 `program_basename` is a private helper: `Path::new(program).file_name()` →
-`to_str()` → owned `String`; returns `None` for empty / trailing-slash inputs.
+`to_str()` → owned `String`; returns `None` for empty / pure-separator inputs
+(`""`, `"/"`). Trailing slashes are stripped by `Path::file_name`, so `"foo/"`
+yields `"foo"`.
 
 Re-exported from `lib.rs`:
 ```rust
