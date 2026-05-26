@@ -521,3 +521,44 @@ async fn danger_full_access_runs_unsandboxed() {
     assert_eq!(out.exit_code, Some(0));
     assert!(escape.exists());
 }
+
+#[cfg(feature = "proxy")]
+#[tokio::test]
+async fn deny_read_masks_secret_inside_writable_root() {
+    if bwrap_unavailable() {
+        eprintln!("skip: no bwrap");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join(".env"), b"SECRET=1").unwrap();
+    std::fs::write(root.join("data.txt"), b"public").unwrap();
+
+    let policy = SandboxPolicy::WorkspaceWrite(
+        WorkspaceWrite::new(vec![root.clone()])
+            .network(NetworkPolicy::Proxied { allowlist: vec![] })
+            .deny_read(format!("{}/.env", root.display())),
+    );
+    let sb = sandbox();
+
+    let out = sb
+        .run(sh("cat .env", &root), &policy, RunOpts::default())
+        .await
+        .unwrap();
+    assert_ne!(
+        out.exit_code,
+        Some(0),
+        "secret inside writable root must stay masked"
+    );
+
+    let out = sb
+        .run(sh("cat data.txt", &root), &policy, RunOpts::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "sibling readable; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

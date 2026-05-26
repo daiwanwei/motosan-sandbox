@@ -1,7 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use motosan_sandbox::{
-    NetworkPolicy, RunOpts, Sandbox, SandboxCommand, SandboxPolicy, WorkspaceWrite,
+    NetworkPolicy, ReadOnly, RunOpts, Sandbox, SandboxCommand, SandboxPolicy, WorkspaceWrite,
 };
 use std::collections::BTreeMap;
 
@@ -115,9 +115,7 @@ async fn python_posix_semaphore_is_allowed() {
     let cwd = dir.path().canonicalize().unwrap();
     let sb = Sandbox::new();
     // ReadOnly is enough: a POSIX semaphore is IPC, not a filesystem write.
-    let policy = SandboxPolicy::ReadOnly {
-        network: NetworkPolicy::Blocked,
-    };
+    let policy = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked));
     let out = sb
         .run(
             SandboxCommand {
@@ -158,9 +156,7 @@ async fn python_general_shared_memory_stays_denied() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().canonicalize().unwrap();
     let sb = Sandbox::new();
-    let policy = SandboxPolicy::ReadOnly {
-        network: NetworkPolicy::Blocked,
-    };
+    let policy = SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked));
     // SharedMemory(create=True) calls shm_open(O_CREAT) on a /psm_* name,
     // which the narrow OpenMP-only grant does not cover.
     let script = "import multiprocessing.shared_memory as sm; \
@@ -189,4 +185,37 @@ async fn python_general_shared_memory_stays_denied() {
         stderr.contains("psm_"),
         "expected the POSIX shared-memory (/psm_*) denial; stderr: {stderr}"
     );
+}
+
+#[tokio::test]
+async fn deny_read_glob_hides_secret_but_not_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join(".env"), b"SECRET=1").unwrap();
+    std::fs::write(root.join("data.txt"), b"public").unwrap();
+
+    let sb = Sandbox::new();
+    let policy = SandboxPolicy::ReadOnly(
+        ReadOnly::new(NetworkPolicy::Blocked).deny_read(format!("{}/.env", root.display())),
+    );
+
+    // secret: denied
+    let out = sb
+        .run(sh("cat .env", &root), &policy, RunOpts::default())
+        .await
+        .unwrap();
+    assert_ne!(out.exit_code, Some(0), "secret read must be denied");
+
+    // sibling: allowed (no over-deny)
+    let out = sb
+        .run(sh("cat data.txt", &root), &policy, RunOpts::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "sibling read must succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("public"));
 }

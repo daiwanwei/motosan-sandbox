@@ -28,7 +28,7 @@ pub mod helper;
 
 pub use denial::is_likely_sandbox_denied;
 pub use error::Error;
-pub use policy::{HostPattern, NetworkPolicy, SandboxPolicy, WorkspaceWrite};
+pub use policy::{HostPattern, NetworkPolicy, ReadOnly, SandboxPolicy, WorkspaceWrite};
 pub use transform::NETWORK_DISABLED_ENV;
 pub use types::{
     ExecOutput, ProxyHandle, RunOpts, SandboxCommand, SandboxKind, SpawnRequest, TransformCtx,

@@ -37,6 +37,8 @@ tempfile = { version = "3", optional = true }
 landlock = "0.4.5"
 seccompiler = "0.5.0"
 libc = "0.2"
+globset = "0.4"
+walkdir = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

@@ -13,6 +13,31 @@ use crate::Sandbox;
 /// self-restrict. Mirrors Codex's `CODEX_SANDBOX_NETWORK_DISABLED`.
 pub const NETWORK_DISABLED_ENV: &str = "MOTOSAN_SANDBOX_NETWORK_DISABLED";
 
+/// Resolve deny-read globs to absolute form against `cwd`. Glob already
+/// starting with `/` is kept; otherwise `cwd` is prepended so relative globs
+/// anchor under the command's working directory (spec: relative globs resolve
+/// against SandboxCommand::cwd). Done ONCE here so Seatbelt and bwrap agree.
+///
+/// Both callers live behind `macos` / `(linux, proxy)` cfgs, so on the
+/// linux-no-proxy cross-section this is dead — allow it there (mirrors the
+/// `ctx` cfg_attr below; guarded by CI's `clippy --no-default-features` cell).
+#[cfg_attr(
+    not(any(target_os = "macos", all(target_os = "linux", feature = "proxy"))),
+    allow(dead_code)
+)]
+pub(crate) fn resolve_deny_globs(globs: &[String], cwd: &std::path::Path) -> Vec<String> {
+    globs
+        .iter()
+        .map(|g| {
+            if g.starts_with('/') {
+                g.clone()
+            } else {
+                format!("{}/{}", cwd.to_string_lossy().trim_end_matches('/'), g)
+            }
+        })
+        .collect()
+}
+
 impl Sandbox {
     /// Build the concrete command to spawn. Pure given its inputs.
     pub fn transform(
@@ -65,6 +90,7 @@ impl Sandbox {
                         let helper = HelperPolicy::for_proxied(
                             writable_roots,
                             read_only_subpaths,
+                            resolve_deny_globs(policy.deny_read_globs(), &cmd.cwd),
                             route_spec,
                         );
                         let helper_exe = match &self.helper_exe {
@@ -92,7 +118,8 @@ impl Sandbox {
             #[cfg(target_os = "macos")]
             SandboxKind::MacosSeatbelt => {
                 let proxy_addr = ctx.proxy.map(|h| h.addr);
-                let mut req = crate::seatbelt::transform_seatbelt(cmd, policy, proxy_addr)?;
+                let deny = resolve_deny_globs(policy.deny_read_globs(), &cmd.cwd);
+                let mut req = crate::seatbelt::transform_seatbelt(cmd, policy, proxy_addr, &deny)?;
                 // Layer proxy env on top, sourced from the ctx (the pure
                 // build_env() helper has no ctx and stays untouched).
                 if let NetworkPolicy::Proxied { .. } = policy.network() {
@@ -152,6 +179,7 @@ fn passthrough(cmd: &SandboxCommand, policy: &SandboxPolicy) -> SpawnRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::ReadOnly;
     use std::path::PathBuf;
 
     fn cmd() -> SandboxCommand {
@@ -170,9 +198,7 @@ mod tests {
     fn build_env_sets_marker_when_network_blocked() {
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Blocked,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
         );
         assert_eq!(
             env.get(std::ffi::OsStr::new(NETWORK_DISABLED_ENV))
@@ -185,9 +211,7 @@ mod tests {
     fn build_env_omits_marker_when_network_allowed() {
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Allowed,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Allowed)),
         );
         assert!(!env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
     }
@@ -198,9 +222,7 @@ mod tests {
         // cooperative tools would self-restrict and refuse to use the proxy.
         let env = build_env(
             &cmd(),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Proxied { allowlist: vec![] },
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Proxied { allowlist: vec![] })),
         );
         assert!(!env.contains_key(std::ffi::OsStr::new(NETWORK_DISABLED_ENV)));
     }

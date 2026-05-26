@@ -1,7 +1,7 @@
 use motosan_sandbox::{Sandbox, SandboxCommand, SandboxPolicy, TransformCtx, NETWORK_DISABLED_ENV};
-// Only the Linux-gated test uses this; cfg the import so macOS has no unused-import warning.
+// Only the Linux-gated test uses these; cfg the imports so macOS has no unused-import warning.
 #[cfg(target_os = "linux")]
-use motosan_sandbox::NetworkPolicy;
+use motosan_sandbox::{NetworkPolicy, ReadOnly};
 use std::collections::BTreeMap;
 
 fn cmd(program: &str, args: &[&str]) -> SandboxCommand {
@@ -38,9 +38,7 @@ fn linux_builds_reexec_request() {
     let req = sb
         .transform(
             &cmd("echo", &["hi"]),
-            &SandboxPolicy::ReadOnly {
-                network: NetworkPolicy::Blocked,
-            },
+            &SandboxPolicy::ReadOnly(ReadOnly::new(NetworkPolicy::Blocked)),
             &TransformCtx::default(),
         )
         .expect("linux transforms to helper re-exec");

@@ -52,6 +52,17 @@ async fn main() -> Result<(), motosan_sandbox::Error> {
 
 ## Security notes
 
+- **Hide secrets with `deny_read`.** `ReadOnly`/`WorkspaceWrite` accept
+  `deny_read("<glob>")` patterns (e.g. `**/.env`, `**/*.pem`) that make matches
+  UNREADABLE — the control that stops untrusted code from exfiltrating API keys
+  through an allowed egress. Enforced on macOS Seatbelt (regex deny) and the
+  Linux bwrap `Proxied` path (mask mounts). On the Linux Landlock path
+  (`Blocked`/`Allowed` network) a non-empty deny-read list returns
+  `Error::Unsupported` — Landlock is allow-only and cannot carve a read
+  exception (same limitation as `read_only_subpaths`). Relative globs resolve
+  against the command cwd; masks are applied after writable binds, so a secret
+  inside a writable root is still hidden. Broad root-anchored globs (`**/x`)
+  walk much of the tree on Linux — prefer prefixed globs.
 - **Curate the environment.** `SandboxCommand::env` is passed verbatim; never set
   it to `std::env::vars_os()` — that leaks secrets into the command.
 - **Don't mark `.git` read-only.** It breaks `git commit` inside the sandbox.
