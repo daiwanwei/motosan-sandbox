@@ -203,6 +203,25 @@ mod tests {
     }
 
     #[test]
+    fn base_policy_grants_posix_ipc() {
+        let (text, _) = build_policy(
+            &SandboxPolicy::ReadOnly {
+                network: NetworkPolicy::Blocked,
+            },
+            None,
+        )
+        .unwrap();
+        assert!(
+            text.contains("(allow ipc-posix-sem)"),
+            "base policy must grant POSIX semaphores for Python multiprocessing"
+        );
+        assert!(
+            text.contains("ipc-posix-shm-write-create"),
+            "base policy must grant POSIX shared memory for OpenMP/NumPy"
+        );
+    }
+
+    #[test]
     fn proxied_without_addr_fails_closed() {
         let policy = SandboxPolicy::ReadOnly {
             network: NetworkPolicy::Proxied { allowlist: vec![] },

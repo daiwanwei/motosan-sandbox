@@ -8,6 +8,18 @@
 (allow sysctl-read)
 (allow mach-lookup)
 
+; --- POSIX IPC for MULTI-PROCESS Python: semaphores for `multiprocessing`
+;     (Lock/Queue/Pool); shared memory for `multiprocessing.shared_memory`
+;     and cross-process shared tensors (PyTorch). NOT needed for in-process
+;     threaded NumPy/pandas/BLAS — those use pthreads, no IPC surface.
+;     Local IPC only: opens no network egress and no filesystem-escape path
+;     (a colluding host process could use it as a covert channel, but that is
+;     outside the untrusted-script threat model). Mirrors Codex's seatbelt
+;     base policy (codex-rs/sandboxing/src/seatbelt_base_policy.sbpl). ---
+(allow ipc-posix-sem)
+(allow ipc-posix-shm-read-data ipc-posix-shm-read-metadata
+       ipc-posix-shm-write-create ipc-posix-shm-write-data)
+
 ; --- whole filesystem is READABLE; writes are governed by appended rules ---
 (allow file-read*)
 
