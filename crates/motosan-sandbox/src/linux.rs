@@ -158,9 +158,12 @@ fn run_proxied_outer(
         inner_argv.push(p.to_string_lossy().into_owned());
     }
 
+    let deny_read_masks = crate::linux_bwrap::expand_deny_read_masks(&helper.deny_read_globs)
+        .unwrap_or_else(|e| die(HELPER_EXIT_NOT_ENFORCED, &format!("deny-read expand: {e}")));
     let argv = build_bwrap_argv(
         &helper.writable_roots,
         &helper.read_only_subpaths,
+        &deny_read_masks,
         &inner_argv,
     );
 

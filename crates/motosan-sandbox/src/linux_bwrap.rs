@@ -12,7 +12,64 @@
 
 #![cfg(target_os = "linux")]
 
+use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
+
+/// Hard cap on total deny-read matches (mirrors Codex's 8192).
+const MAX_DENY_READ_GLOB_MATCHES: usize = 8192;
+
+/// Expand deny-read globs against the host FS (the outer helper stage runs on
+/// the host before entering bwrap) and return bwrap mask args: files get
+/// `--ro-bind /dev/null <p>`, directories get `--tmpfs <p>`. Walks from each
+/// glob's static prefix. Errors if matches exceed the cap (refuse, don't
+/// partially mask).
+#[allow(dead_code)] // wired by Task 7 (run() Linux Proxied integration)
+pub(crate) fn expand_deny_read_masks(globs: &[String]) -> std::io::Result<Vec<String>> {
+    use globset::Glob;
+    use walkdir::WalkDir;
+
+    let mut args = Vec::new();
+    let mut count = 0usize;
+    for g in globs {
+        let matcher = Glob::new(g)
+            .map_err(|e| IoError::new(ErrorKind::InvalidInput, format!("bad glob {g:?}: {e}")))?
+            .compile_matcher();
+        let root = static_prefix_dir(g);
+        for entry in WalkDir::new(&root).into_iter().filter_map(Result::ok) {
+            let p = entry.path();
+            if !matcher.is_match(p) {
+                continue;
+            }
+            count += 1;
+            if count > MAX_DENY_READ_GLOB_MATCHES {
+                return Err(IoError::other(format!(
+                    "deny-read glob {g:?} matched >{MAX_DENY_READ_GLOB_MATCHES} paths"
+                )));
+            }
+            let s = p.to_string_lossy().into_owned();
+            if entry.file_type().is_dir() {
+                args.push("--tmpfs".into());
+                args.push(s);
+            } else {
+                args.push("--ro-bind".into());
+                args.push("/dev/null".into());
+                args.push(s);
+            }
+        }
+    }
+    Ok(args)
+}
+
+/// The non-wildcard leading directory of a glob, e.g. `/a/b/**` → `/a/b`,
+/// `/a/*.pem` → `/a`. Falls back to `/` if there is no static prefix.
+fn static_prefix_dir(glob: &str) -> PathBuf {
+    let cut = glob.find(['*', '?']).unwrap_or(glob.len());
+    let prefix = &glob[..cut];
+    match prefix.rsplit_once('/') {
+        Some((dir, _)) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from("/"),
+    }
+}
 
 /// First `bwrap` on `PATH`, or `None`. Spec §3: system-only — no vendoring,
 /// no C-build fallback; if this returns `None`, the Proxied path must
@@ -48,6 +105,7 @@ pub(crate) fn find_bwrap() -> Option<PathBuf> {
 pub(crate) fn build_bwrap_argv(
     writable_roots: &[PathBuf],
     read_only_subpaths: &[PathBuf],
+    deny_read_masks: &[String],
     inner_argv: &[String],
 ) -> Vec<String> {
     let mut a: Vec<String> = vec![
@@ -79,6 +137,9 @@ pub(crate) fn build_bwrap_argv(
         a.push(s.clone());
         a.push(s);
     }
+    // Deny-read masks LAST so they override the whole-FS ro-bind AND any
+    // writable --bind above (bwrap applies mounts in argv order).
+    a.extend(deny_read_masks.iter().cloned());
     // Namespaces: user (unprivileged) + pid (target=pid1, kernel-reaps the
     // forked bridge — spec §7) + net (the hard wall — spec §1/§4).
     a.push("--unshare-user".into());
@@ -94,10 +155,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn expand_deny_read_masks_files_and_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/.env"), b"x").unwrap();
+        std::fs::create_dir(root.join("secretdir")).unwrap();
+
+        let globs = vec![
+            format!("{}/**/.env", root.display()),
+            format!("{}/secretdir", root.display()),
+        ];
+        let masks = expand_deny_read_masks(&globs).unwrap();
+        let file = root.join("sub/.env").to_string_lossy().into_owned();
+        let dir = root.join("secretdir").to_string_lossy().into_owned();
+        // file → ro-bind /dev/null; dir → tmpfs
+        assert!(masks
+            .windows(3)
+            .any(|w| w == ["--ro-bind", "/dev/null", &file]));
+        assert!(masks.windows(2).any(|w| w == ["--tmpfs", &dir]));
+    }
+
+    #[test]
+    fn build_bwrap_argv_emits_masks_after_writable_binds() {
+        // 4th param is PRE-FORMED bwrap mask args (not bare paths).
+        let argv = build_bwrap_argv(
+            &[std::path::PathBuf::from("/ws")],
+            &[],
+            &["--tmpfs".to_string(), "/ws/secret".to_string()],
+            &["/inner".to_string()],
+        );
+        let s = argv.join(" ");
+        let writable_idx = s.find("--bind /ws /ws").unwrap();
+        let mask_idx = s.find("--tmpfs /ws/secret").unwrap();
+        assert!(mask_idx > writable_idx, "masks must come after writable binds");
+    }
+
+    #[test]
     fn argv_has_ro_root_writable_bind_and_unshare_net() {
         let argv = build_bwrap_argv(
             &[PathBuf::from("/ws")],
             &[PathBuf::from("/ws/secret")],
+            &[],
             &[
                 "/inner".into(),
                 "--mode=proxied-inner".into(),
@@ -131,6 +230,7 @@ mod tests {
                 PathBuf::from("/a/b"),
             ],
             &[],
+            &[],
             &["/inner".into()],
         );
         // Find positions of each `--bind <p> <p>` triple.
@@ -148,6 +248,7 @@ mod tests {
         let argv = build_bwrap_argv(
             &[PathBuf::from("/ws")],
             &[PathBuf::from("/ws/secret")],
+            &[],
             &["/inner".into()],
         );
         // Find the index of the writable bind triple for /ws and the ro-bind
@@ -165,7 +266,7 @@ mod tests {
 
     #[test]
     fn no_extra_flags_when_no_roots() {
-        let argv = build_bwrap_argv(&[], &[], &["/bin/true".into()]);
+        let argv = build_bwrap_argv(&[], &[], &[], &["/bin/true".into()]);
         // Must still set the safety flags + the three namespaces + ro-root.
         let s = argv.join(" ");
         assert!(s.contains("--new-session"));
