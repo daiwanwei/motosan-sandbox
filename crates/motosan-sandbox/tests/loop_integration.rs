@@ -5,13 +5,12 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use motosan_agent_tool::{Tool, ToolContext, ToolDef, ToolResult};
+use async_trait::async_trait;
+use motosan_agent_tool::{Tool, ToolAnnotations, ToolContext, ToolDef, ToolOutput};
 use serde_json::{json, Value};
 
 use motosan_agent_loop::testing::MockLlmClient;
@@ -26,7 +25,7 @@ use motosan_sandbox::{
 };
 
 /// Sentinel the tool stamps into a denied result so an Extension (which only
-/// sees a `ToolResult`, never the `ExecOutput`) can recognize a sandbox denial.
+/// sees a `ToolOutput`, never the `ExecOutput`) can recognize a sandbox denial.
 /// See design §4.1 — a finding, not a final mechanism.
 const DENIED_SENTINEL: &str = "[motosan-sandbox: DENIED]";
 
@@ -39,9 +38,9 @@ fn curated_env() -> BTreeMap<OsString, OsString> {
     env
 }
 
-/// Map a sandbox `ExecOutput` to a loop `ToolResult` (free fn: orphan rule
+/// Map a sandbox `ExecOutput` to a loop `ToolOutput` (free fn: orphan rule
 /// forbids `impl From` here, both types are foreign to this test crate).
-fn to_tool_result(out: ExecOutput, kind: motosan_sandbox::SandboxKind) -> ToolResult {
+fn to_tool_output(out: ExecOutput, kind: motosan_sandbox::SandboxKind) -> ToolOutput {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     let body = format!(
@@ -49,11 +48,11 @@ fn to_tool_result(out: ExecOutput, kind: motosan_sandbox::SandboxKind) -> ToolRe
         out.exit_code, out.timed_out
     );
     if is_likely_sandbox_denied(&out, kind) {
-        ToolResult::error(format!("{DENIED_SENTINEL}\n{body}"))
+        ToolOutput::error(format!("{DENIED_SENTINEL}\n{body}"))
     } else if out.exit_code == Some(0) {
-        ToolResult::text(body)
+        ToolOutput::text(body)
     } else {
-        ToolResult::error(body)
+        ToolOutput::error(body)
     }
 }
 
@@ -92,6 +91,7 @@ struct SandboxedExecTool {
     workspace: PathBuf,
 }
 
+#[async_trait]
 impl Tool for SandboxedExecTool {
     fn def(&self) -> ToolDef {
         ToolDef {
@@ -108,20 +108,23 @@ impl Tool for SandboxedExecTool {
         }
     }
 
-    fn call(
-        &self,
-        args: Value,
-        _ctx: &ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + '_>> {
-        Box::pin(async move {
-            let Some((cmd, policy)) = command_and_policy(&args, &self.workspace) else {
-                return ToolResult::error("missing/invalid `command`");
-            };
-            match self.sandbox.run(cmd, &policy, RunOpts::default()).await {
-                Ok(out) => to_tool_result(out, Sandbox::detect()),
-                Err(e) => ToolResult::error(format!("sandbox run failed: {e}")),
-            }
-        })
+    fn annotations(&self) -> ToolAnnotations {
+        ToolAnnotations {
+            read_only: false,
+            destructive: true,
+            network_access: false,
+            idempotent: false,
+        }
+    }
+
+    async fn call(&self, args: Value, _ctx: &ToolContext) -> ToolOutput {
+        let Some((cmd, policy)) = command_and_policy(&args, &self.workspace) else {
+            return ToolOutput::error("missing/invalid `command`");
+        };
+        match self.sandbox.run(cmd, &policy, RunOpts::default()).await {
+            Ok(out) => to_tool_output(out, Sandbox::detect()),
+            Err(e) => ToolOutput::error(format!("sandbox run failed: {e}")),
+        }
     }
 }
 
@@ -251,7 +254,8 @@ impl Extension for SandboxApprovalExtension {
 
     async fn after_tool_result(
         &mut self,
-        result: &ToolResult,
+        _call: &ToolCallItem,
+        result: &ToolOutput,
         _ctx: &mut HookCtx<'_>,
     ) -> Result<FlowDecision, ExtError> {
         let denied = result.is_error
@@ -372,11 +376,11 @@ impl Extension for DeferGateExtension {
                         .run(cmd, &SandboxPolicy::DangerFullAccess, RunOpts::default())
                         .await
                     {
-                        Ok(out) => to_tool_result(out, Sandbox::detect()),
-                        Err(e) => ToolResult::error(format!("escalated run failed: {e}")),
+                        Ok(out) => to_tool_output(out, Sandbox::detect()),
+                        Err(e) => ToolOutput::error(format!("escalated run failed: {e}")),
                     }
                 }
-                None => ToolResult::error("bad command"),
+                None => ToolOutput::error("bad command"),
             };
             let _ = sender
                 .send(motosan_agent_loop::AgentOp::ExtensionResume { call_id, result })
