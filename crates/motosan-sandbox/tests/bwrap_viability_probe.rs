@@ -91,4 +91,43 @@ fn bwrap_netns_is_usable_and_hard() {
         hard.status.code(),
         String::from_utf8_lossy(&hard.stderr)
     );
+
+    // (c) inside the netns, binding 127.0.0.1 must SUCCEED. The Phase 3 in-netns
+    // bridge binds loopback listeners; this fails if bwrap doesn't bring `lo`
+    // up (or the payload would need CAP_NET_ADMIN to do it). Without this check
+    // the probe is green while the real bridge dies with EPERM (regression that
+    // shipped once — see fix/phase3-loopback-caps). The payload has NO
+    // CAP_NET_ADMIN, so a passing bind proves bwrap configured `lo` for us.
+    let bind_script = "import socket,sys\n\
+                       s=socket.socket()\n\
+                       try:\n  s.bind(('127.0.0.1',0));print('BOUND',s.getsockname()[1]);sys.exit(0)\n\
+                       except OSError as e:\n  print('BINDFAIL',e);sys.exit(8)\n";
+    let lo = Command::new(&bwrap)
+        .args([
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--",
+            "python3",
+            "-c",
+            bind_script,
+        ])
+        .output()
+        .expect("spawn bwrap python (loopback bind)");
+    let lo_stdout = String::from_utf8_lossy(&lo.stdout);
+    assert!(
+        lo_stdout.contains("BOUND") && lo.status.code() == Some(0),
+        "binding 127.0.0.1 inside the bwrap netns FAILED — `lo` is not usable \
+         without CAP_NET_ADMIN, so the Phase 3 bridge cannot bind its listeners. \
+         exit={:?} stdout={lo_stdout:?} stderr={:?}",
+        lo.status.code(),
+        String::from_utf8_lossy(&lo.stderr)
+    );
 }
