@@ -197,24 +197,19 @@ git commit -m "feat(policy): ReadOnly builder + deny_read_globs on read policies
 In `crates/motosan-sandbox/src/seatbelt.rs` `mod tests`, add:
 
 ```rust
+// deny_read_regexes receives an ALREADY-ABSOLUTE glob — transform.rs resolves
+// relative→absolute against cmd.cwd ONCE (see Step 5), so both backends agree.
 #[test]
 fn glob_to_deny_regexes_translates_and_anchors() {
-    // Absolute glob: emits the pattern regex + the static-prefix dir regex.
-    let rs = deny_read_regexes("/Users/x/.aws/**", std::path::Path::new("/tmp"));
+    let rs = deny_read_regexes("/Users/x/.aws/**");
     assert!(rs.iter().any(|r| r == r"^/Users/x/\.aws/.*$"));
     assert!(rs.iter().any(|r| r == r"^/Users/x/\.aws$"));
 }
 
 #[test]
 fn glob_to_deny_regexes_single_star_is_segment_scoped() {
-    let rs = deny_read_regexes("/ws/*.pem", std::path::Path::new("/tmp"));
+    let rs = deny_read_regexes("/ws/*.pem");
     assert!(rs.iter().any(|r| r == r"^/ws/[^/]*\.pem$"));
-}
-
-#[test]
-fn glob_to_deny_regexes_resolves_relative_against_cwd() {
-    let rs = deny_read_regexes(".env", std::path::Path::new("/work/s"));
-    assert!(rs.iter().any(|r| r == r"^/work/s/\.env$"));
 }
 ```
 
@@ -228,28 +223,19 @@ Expected: compile error — `deny_read_regexes` not found.
 In `crates/motosan-sandbox/src/seatbelt.rs`, add:
 
 ```rust
-use std::path::Path;
-
-/// Translate one deny-read glob into anchored Seatbelt regex(es). Mirrors
-/// Codex's `seatbelt_regex_for_unreadable_glob`: a regex for the glob itself
-/// plus, when the glob has a `/**` tail, a regex for the static-prefix
-/// directory so the directory node is also denied. Relative globs resolve
-/// against `cwd`. `**` → `.*`, `*` → `[^/]*`, `?` → `[^/]`; all other regex
-/// metachars are escaped.
-pub(crate) fn deny_read_regexes(glob: &str, cwd: &Path) -> Vec<String> {
-    // Resolve to absolute against cwd.
-    let abs = if glob.starts_with('/') {
-        glob.to_string()
-    } else {
-        format!("{}/{}", cwd.to_string_lossy().trim_end_matches('/'), glob)
-    };
-
-    let mut out = vec![format!("^{}$", glob_body_to_regex(&abs))];
+/// Translate one ALREADY-ABSOLUTE deny-read glob into anchored Seatbelt
+/// regex(es). Mirrors Codex's `seatbelt_regex_for_unreadable_glob`: a regex for
+/// the glob itself plus, when the glob has a wildcard tail, a regex for the
+/// static-prefix directory so the directory node is also denied. `**` → `.*`,
+/// `*` → `[^/]*`, `?` → `[^/]`; all other regex metachars are escaped.
+/// (transform.rs resolves relative globs to absolute before calling this.)
+pub(crate) fn deny_read_regexes(glob: &str) -> Vec<String> {
+    let mut out = vec![format!("^{}$", glob_body_to_regex(glob))];
 
     // Static prefix directory (everything before the first wildcard segment),
     // so `/a/b/**` also denies reading `/a/b` itself.
-    if let Some(idx) = abs.find(['*', '?']) {
-        let prefix = &abs[..idx];
+    if let Some(idx) = glob.find(['*', '?']) {
+        let prefix = &glob[..idx];
         if let Some(dir) = prefix.rsplit_once('/').map(|(d, _)| d) {
             if !dir.is_empty() {
                 out.push(format!("^{}$", regex_escape(dir)));
@@ -259,7 +245,9 @@ pub(crate) fn deny_read_regexes(glob: &str, cwd: &Path) -> Vec<String> {
     out
 }
 
-/// Translate glob metachars to regex; escape everything else.
+/// Translate glob metachars to regex; escape everything else. NOTE: a `**/`
+/// tail becomes `.*`, so `**/.env` also matches `foo.env` (slight over-deny) —
+/// acceptable for a secret-hiding deny rule.
 fn glob_body_to_regex(glob: &str) -> String {
     let mut re = String::with_capacity(glob.len() * 2);
     let bytes = glob.as_bytes();
@@ -300,42 +288,77 @@ fn regex_escape(s: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Append deny-read rules in `build_policy` (thread cwd)**
+- [ ] **Step 4: Append deny-read rules in `build_policy` (resolved globs)**
 
-In `crates/motosan-sandbox/src/seatbelt.rs`, change `build_policy`'s signature to accept the cwd and emit the rules. Update the signature:
+In `crates/motosan-sandbox/src/seatbelt.rs`, change `build_policy` and
+`transform_seatbelt` to accept the **resolved (absolute)** deny-read globs.
+Signature:
 ```rust
 pub(crate) fn build_policy(
     policy: &SandboxPolicy,
     proxy: Option<SocketAddr>,
-    cwd: &Path,
+    deny_read_globs: &[String],
 ) -> Result<(String, Vec<Param>), Error> {
 ```
 After the existing network match block (just before `Ok((sections.join("\n"), params))`), add:
 ```rust
     // Deny-read globs → regex deny rules. Appended AFTER `(allow file-read*)`
-    // so they override it (SBPL last-match-wins). No -D param needed: the
-    // regex is inline. Static-prefix is taken as-is here; canonicalization of
-    // the prefix is the caller's responsibility (writable roots are already
-    // canonicalized by convention).
-    for glob in policy.deny_read_globs() {
-        for re in deny_read_regexes(glob, cwd) {
+    // so they override it (SBPL last-match-wins). No -D param: regex is inline.
+    // Globs are already absolute (resolved against cwd in transform()).
+    for glob in deny_read_globs {
+        for re in deny_read_regexes(glob) {
             let re = re.replace('"', "\\\"");
             sections.push(format!("(deny file-read* (regex #\"{re}\"))"));
         }
     }
 ```
-Update the caller `transform_seatbelt` to pass cwd:
+Thread the param through `transform_seatbelt`:
 ```rust
-    let (policy_text, params) = build_policy(policy, proxy, &cmd.cwd)?;
+pub(crate) fn transform_seatbelt(
+    cmd: &SandboxCommand,
+    policy: &SandboxPolicy,
+    proxy: Option<SocketAddr>,
+    deny_read_globs: &[String],
+) -> Result<SpawnRequest, Error> {
+    let (policy_text, params) = build_policy(policy, proxy, deny_read_globs)?;
 ```
-Fix the `build_policy(...)` calls in `seatbelt.rs` `mod tests` to pass a cwd, e.g. `std::path::Path::new("/tmp")`.
+Fix the `build_policy(...)` calls in `seatbelt.rs` `mod tests` to pass `&[]` (or a test glob list) as the new 3rd arg.
 
-- [ ] **Step 5: Run unit tests to verify they pass**
+- [ ] **Step 5: Resolve globs against cwd in `transform()` (central, both backends)**
+
+In `crates/motosan-sandbox/src/transform.rs`, add the shared resolver (module
+level):
+```rust
+/// Resolve deny-read globs to absolute form against `cwd`. Glob already
+/// starting with `/` is kept; otherwise `cwd` is prepended so relative globs
+/// anchor under the command's working directory (spec: relative globs resolve
+/// against SandboxCommand::cwd). Done ONCE here so Seatbelt and bwrap agree.
+pub(crate) fn resolve_deny_globs(globs: &[String], cwd: &std::path::Path) -> Vec<String> {
+    globs
+        .iter()
+        .map(|g| {
+            if g.starts_with('/') {
+                g.clone()
+            } else {
+                format!("{}/{}", cwd.to_string_lossy().trim_end_matches('/'), g)
+            }
+        })
+        .collect()
+}
+```
+In the macOS arm, compute and pass the resolved list:
+```rust
+                let deny = resolve_deny_globs(policy.deny_read_globs(), &cmd.cwd);
+                let mut req = crate::seatbelt::transform_seatbelt(cmd, policy, proxy_addr, &deny)?;
+```
+(The Linux Proxied arm is updated in Task 3 Step 4 to call `resolve_deny_globs` the same way.)
+
+- [ ] **Step 6: Run unit tests to verify they pass**
 
 Run: `cargo test -p motosan-sandbox --lib seatbelt::`
 Expected: PASS.
 
-- [ ] **Step 6: Write the behavioral macOS enforcement test**
+- [ ] **Step 7: Write the behavioral macOS enforcement test**
 
 In `crates/motosan-sandbox/tests/seatbelt_enforcement.rs`, append:
 
@@ -376,16 +399,16 @@ async fn deny_read_glob_hides_secret_but_not_sibling() {
 ```
 (`sh(...)` and the imports already exist at the top of this file; add `NetworkPolicy` to the `use` if not present.)
 
-- [ ] **Step 7: Run the behavioral test**
+- [ ] **Step 8: Run the behavioral test**
 
 Run: `cargo test -p motosan-sandbox --test seatbelt_enforcement deny_read_glob_hides_secret_but_not_sibling -- --nocapture`
 Expected: PASS (secret `cat` non-zero/denied; `data.txt` prints `public`).
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add crates/motosan-sandbox/src/seatbelt.rs crates/motosan-sandbox/src/transform.rs crates/motosan-sandbox/tests/seatbelt_enforcement.rs
-git commit -m "feat(seatbelt): enforce deny_read_globs via regex deny rules"
+git commit -m "feat(seatbelt): enforce deny_read_globs via regex deny rules (cwd-resolved)"
 ```
 
 ---
@@ -474,11 +497,12 @@ In `crates/motosan-sandbox/src/transform.rs`, in the Linux Proxied arm, extract 
                         let helper = HelperPolicy::for_proxied(
                             writable_roots,
                             read_only_subpaths,
-                            policy.deny_read_globs().to_vec(),
+                            resolve_deny_globs(policy.deny_read_globs(), &cmd.cwd),
                             route_spec,
                         );
 ```
-(Only the added `policy.deny_read_globs().to_vec()` arg is new.)
+(The new arg is the **resolved** glob list via `resolve_deny_globs` from Task 2
+Step 5 — same cwd-resolution the macOS arm uses, so both backends agree.)
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -537,15 +561,16 @@ fn expand_deny_read_masks_files_and_dirs() {
 
 #[test]
 fn build_bwrap_argv_emits_masks_after_writable_binds() {
+    // 4th param is PRE-FORMED bwrap mask args (not bare paths).
     let argv = build_bwrap_argv(
         &[std::path::PathBuf::from("/ws")],
         &[],
-        &["/ws/secret".to_string()],   // a concrete pre-expanded mask path
+        &["--tmpfs".to_string(), "/ws/secret".to_string()],
         &["/inner".to_string()],
     );
     let s = argv.join(" ");
     let writable_idx = s.find("--bind /ws /ws").unwrap();
-    let mask_idx = s.find("/ws/secret").unwrap();
+    let mask_idx = s.find("--tmpfs /ws/secret").unwrap();
     assert!(mask_idx > writable_idx, "masks must come after writable binds");
 }
 ```
@@ -747,8 +772,8 @@ Expected: all green. Push the branch and let CI run the Linux behavioral deny-re
 
 ## Self-Review
 
-- **Spec coverage:** API restructure + `deny_read_globs` accessor → Task 1; Seatbelt regex (incl. relative-cwd resolution, static-prefix) → Task 2; Landlock `Unsupported` fail-closed → Task 3; bwrap expansion + mask-last ordering + match cap + linux deps → Task 4; README + verification → Task 5. The dropped `file-write-unlink` rule (spec §Backend) is honored by emitting read-deny only in Task 2. The ordering correctness clause and writable-root masking test (spec §Testing) are in Task 4.
+- **Spec coverage:** API restructure + `deny_read_globs` accessor → Task 1; Seatbelt regex + static-prefix → Task 2; **relative-glob → absolute resolution against `cmd.cwd` is centralized in `transform.rs` (`resolve_deny_globs`, Task 2 Step 5) and fed to BOTH backends** (Seatbelt in Task 2, bwrap via `for_proxied` in Task 3 Step 4), so they agree and Linux relative globs are not silently unprotected; Landlock `Unsupported` fail-closed → Task 3; bwrap expansion + mask-last ordering + match cap + linux deps → Task 4; README + verification → Task 5. The dropped `file-write-unlink` rule (spec §Backend) is honored by emitting read-deny only in Task 2. The ordering correctness clause and writable-root masking test (spec §Testing) are in Task 4.
 - **Placeholder scan:** no TBDs; all code/commands concrete. The ~18 call-site edits (Task 1 Step 7) are compiler-driven with the exact mechanical rule + file list — not a placeholder.
-- **Type consistency:** `ReadOnly::new`/`deny_read`/`deny_read_globs()` defined in Task 1 are used identically in Tasks 2–4; `HelperPolicy.deny_read_globs` (Task 3) feeds `expand_deny_read_masks` (Task 4); `build_bwrap_argv`'s new 4th param is pre-expanded mask args in both its definition (Task 4 Step 4) and its callers (Task 4 Step 5, and the Task 4 Step 2 argv test). `for_proxied`'s new 3rd arg (`deny_read_globs`) matches between definition (Task 3) and caller (Task 3 Step 4).
+- **Type consistency:** `ReadOnly::new`/`deny_read`/`deny_read_globs()` defined in Task 1 are used identically in Tasks 2–4; `deny_read_regexes(glob)` takes a single absolute glob (no cwd) consistently in Task 2's tests + impl + `build_policy` caller; `resolve_deny_globs(globs, cwd)` (Task 2 Step 5) is called identically in the macOS arm (Task 2) and the Linux arm (Task 3 Step 4); `transform_seatbelt`/`build_policy` take a `deny_read_globs: &[String]` 3rd param consistently; `HelperPolicy.deny_read_globs` (Task 3) feeds `expand_deny_read_masks` (Task 4); `build_bwrap_argv`'s new 4th param is pre-formed mask args in its definition (Task 4 Step 4), callers (Task 4 Step 5), and the argv test (Task 4 Step 2). `for_proxied`'s new 3rd arg matches between definition (Task 3) and caller (Task 3 Step 4).
 
 > **Known follow-up (out of scope):** a configurable `glob_scan_max_depth`; deny-read on the Landlock path; canonicalizing the Seatbelt static prefix through symlinks (today writable roots are canonicalized by convention — document that deny-read globs should likewise use resolved paths on macOS).
