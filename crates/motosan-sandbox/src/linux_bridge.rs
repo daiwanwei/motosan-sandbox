@@ -32,14 +32,18 @@ pub(crate) struct BoundRoute {
     pub local_port: u16,
 }
 
-/// Bind a `127.0.0.1:0` listener per route. A fresh `--unshare-net` netns has
-/// `lo` DOWN with no address, so we bring it up UNCONDITIONALLY first (not as
-/// a fallback) — otherwise the bind always fails with `EADDRNOTAVAIL`.
+/// Bind a `127.0.0.1:0` listener per route. Modern bwrap brings `lo` up (and
+/// assigns `127.0.0.1`) during its `--unshare-net` setup, while the payload runs
+/// with NO `CAP_NET_ADMIN` to (re)configure the interface. So we BIND FIRST and
+/// only fall back to bringing `lo` up if the bind reports the interface isn't
+/// ready (`EADDRNOTAVAIL`/`ENETUNREACH`). Forcing the bring-up unconditionally
+/// (the old behavior) fails with `EPERM` on bwrap netns runners even though the
+/// bind would have succeeded. Mirrors Codex's `bind_local_loopback_listener`
+/// (codex-rs/linux-sandbox/src/proxy_routing.rs).
 pub(crate) fn bind_route_listeners(spec: &ProxyRouteSpec) -> IoResult<Vec<BoundRoute>> {
-    ensure_loopback_up()?;
     let mut out = Vec::with_capacity(spec.routes.len());
     for r in &spec.routes {
-        let l = TcpListener::bind(("127.0.0.1", 0))?;
+        let l = bind_loopback_listener()?;
         let port = l.local_addr()?.port();
         out.push(BoundRoute {
             listener: l,
@@ -48,6 +52,27 @@ pub(crate) fn bind_route_listeners(spec: &ProxyRouteSpec) -> IoResult<Vec<BoundR
         });
     }
     Ok(out)
+}
+
+/// Bind one `127.0.0.1:0` listener, bringing `lo` up only as a fallback if the
+/// first bind fails because the interface isn't up yet.
+fn bind_loopback_listener() -> IoResult<TcpListener> {
+    match TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(l) => Ok(l),
+        Err(e) => {
+            // Only the "interface not ready" errnos warrant bringing `lo` up;
+            // anything else (e.g. EACCES from seccomp) is a real failure.
+            let retry_after_lo_up = matches!(
+                e.raw_os_error(),
+                Some(errno) if errno == libc::EADDRNOTAVAIL || errno == libc::ENETUNREACH
+            );
+            if !retry_after_lo_up {
+                return Err(e);
+            }
+            ensure_loopback_up()?;
+            TcpListener::bind(("127.0.0.1", 0))
+        }
+    }
 }
 
 /// Run the bridge forwarding loops FOREVER (called in the forked child). Each
@@ -104,9 +129,11 @@ pub(crate) fn pump_bidirectional(tcp: std::net::TcpStream, uds: UnixStream) {
     let _ = t.join();
 }
 
-/// Assign `127.0.0.1` to `lo` + bring it UP via raw ioctls (no netlink, no
-/// `ip`). A fresh `--unshare-net` netns has `lo` down with no address, so
-/// BOTH ops are needed before `127.0.0.1` is bindable.
+/// Best-effort: assign `127.0.0.1` to `lo` + bring it UP via raw ioctls (no
+/// netlink, no `ip`). Called only as a FALLBACK when the first loopback bind
+/// fails — modern bwrap already configures `lo`, so this is usually skipped.
+/// Both ioctls need `CAP_NET_ADMIN`; when `lo` is already up/addressed we skip
+/// or tolerate (EPERM) the writes rather than fail.
 fn ensure_loopback_up() -> IoResult<()> {
     // SAFETY: we open an AF_INET DGRAM socket purely for ioctl(); the only
     // memory we touch is two stack-local zero-initialized `libc::ifreq`
@@ -148,22 +175,30 @@ fn ensure_loopback_up() -> IoResult<()> {
             );
             if libc::ioctl(fd, libc::SIOCSIFADDR, &ifr) < 0 {
                 let e = std::io::Error::last_os_error();
-                // Tolerate already-set: re-running the inner stage (e.g. in
-                // tests) shouldn't fail just because lo already has the addr.
-                if e.raw_os_error() != Some(libc::EEXIST) {
+                // Tolerate EEXIST (addr already set) AND EPERM (bwrap already
+                // configured `lo` and the payload lacks CAP_NET_ADMIN to
+                // reassign — harmless, the address is already present). Mirrors
+                // Codex's ensure_loopback_interface_up.
+                if !matches!(e.raw_os_error(), Some(libc::EEXIST) | Some(libc::EPERM)) {
                     return Err(e);
                 }
             }
 
-            // 2) bring lo UP (read flags → OR IFF_UP|IFF_RUNNING → write back)
+            // 2) bring lo UP — but only if it isn't already up. Re-setting the
+            //    flags needs CAP_NET_ADMIN, which the bwrap payload lacks; when
+            //    bwrap already brought `lo` up we skip the write entirely
+            //    (otherwise SIOCSIFFLAGS would fail EPERM on netns runners).
             let mut ifr2: libc::ifreq = std::mem::zeroed();
             set_iface_name(&mut ifr2, b"lo");
             if libc::ioctl(fd, libc::SIOCGIFFLAGS, &mut ifr2) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            ifr2.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
-            if libc::ioctl(fd, libc::SIOCSIFFLAGS, &ifr2) < 0 {
-                return Err(std::io::Error::last_os_error());
+            let up = libc::IFF_UP as libc::c_short;
+            if (ifr2.ifr_ifru.ifru_flags & up) != up {
+                ifr2.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
+                if libc::ioctl(fd, libc::SIOCSIFFLAGS, &ifr2) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             Ok(())
         })();
