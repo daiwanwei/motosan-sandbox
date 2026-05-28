@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use motosan_agent_loop::testing::MockLlmClient;
 use motosan_agent_loop::{
-    Engine, ExtError, Extension, FlowDecision, HookCtx, LlmClient, LlmResponse, Message,
+    Engine, ExtError, FlowDecision, HookCtx, LlmClient, LlmResponse, LoopInterceptor, Message,
     ToolCallItem, ToolDecision,
 };
 
@@ -247,7 +247,7 @@ struct SandboxApprovalExtension {
 }
 
 #[async_trait::async_trait]
-impl Extension for SandboxApprovalExtension {
+impl LoopInterceptor for SandboxApprovalExtension {
     fn name(&self) -> &'static str {
         "sandbox-approval"
     }
@@ -348,7 +348,7 @@ struct DeferGateExtension {
 }
 
 #[async_trait::async_trait]
-impl Extension for DeferGateExtension {
+impl LoopInterceptor for DeferGateExtension {
     fn name(&self) -> &'static str {
         "defer-gate"
     }
