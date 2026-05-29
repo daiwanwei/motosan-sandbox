@@ -94,10 +94,10 @@ struct SandboxedExecTool {
 #[async_trait]
 impl Tool for SandboxedExecTool {
     fn def(&self) -> ToolDef {
-        ToolDef {
-            name: "shell".into(),
-            description: "Run a shell command in the sandboxed workspace.".into(),
-            input_schema: json!({
+        ToolDef::new(
+            "shell",
+            "Run a shell command in the sandboxed workspace.",
+            json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "array", "items": { "type": "string" } },
@@ -105,7 +105,7 @@ impl Tool for SandboxedExecTool {
                 },
                 "required": ["command"]
             }),
-        }
+        )
     }
 
     fn annotations(&self) -> ToolAnnotations {
